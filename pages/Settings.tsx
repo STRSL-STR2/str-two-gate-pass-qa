@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Loader2, Plus, Trash2, Save, UploadCloud, AlertTriangle, Download } from "lucide-react";
+import { Loader2, Plus, Trash2, Save, UploadCloud, AlertTriangle, Download, RotateCcw } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface FileUploaderProps {
@@ -166,6 +166,8 @@ export default function Settings() {
   const [newUserRole, setNewUserRole] = useState("user");
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string, type: 'driver' | 'location' | 'timeSlot' | 'user' } | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [resetConfirm, setResetConfirm] = useState<{ id: string, username: string } | null>(null);
+  const [isResetting, setIsResetting] = useState(false);
 
   const fetchData = async () => {
     setLoading(true);
@@ -596,18 +598,23 @@ export default function Settings() {
     }
   };
 
-  const handleResetPassword = async (id: string, emailOrUser: string) => {
+  const confirmResetPassword = async () => {
+    if (!resetConfirm) return;
+    setIsResetting(true);
     try {
-      const { data, error: rpcErr } = await supabase.rpc('admin_reset_user_password', {
-        p_user_id: id,
+      const { error: rpcErr } = await supabase.rpc('admin_reset_user_password', {
+        p_user_id: resetConfirm.id,
         p_new_password: 'password123'
       });
 
       if (rpcErr) throw rpcErr;
       
-      toast.success(`Password for ${emailOrUser || 'user'} reset to 'password123'`);
+      toast.success(`Password for ${resetConfirm.username} reset to 'password123'`);
+      setResetConfirm(null);
     } catch (err: any) {
-      toast.error("Failed to reset password: " + err.message);
+      toast.error("Failed to reset password: " + (err.message || "Unknown error"));
+    } finally {
+      setIsResetting(false);
     }
   };
 
@@ -969,7 +976,7 @@ export default function Settings() {
                           </span>
                         </TableCell>
                         <TableCell>
-                          <Button variant="outline" size="sm" onClick={() => handleResetPassword(p.id, p.email)}>
+                          <Button variant="outline" size="sm" onClick={() => setResetConfirm({ id: p.id, username: p.username })}>
                             Reset Password
                           </Button>
                         </TableCell>
@@ -1038,6 +1045,34 @@ export default function Settings() {
             <Button variant="outline" onClick={() => setDeleteConfirm(null)} disabled={isDeleting}>Cancel</Button>
             <Button variant="destructive" onClick={confirmDelete} disabled={isDeleting} className="bg-red-600 hover:bg-red-700 text-white">
               {isDeleting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />} Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!resetConfirm} onOpenChange={(open) => !open && !isResetting && setResetConfirm(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center text-amber-600 dark:text-amber-500">
+              <AlertTriangle className="h-5 w-5 mr-2" /> Reset User Password
+            </DialogTitle>
+            <DialogDescription className="pt-2 text-slate-600 dark:text-slate-400 space-y-2">
+              <span className="block text-sm">
+                Are you sure you want to reset the password for account <strong className="text-slate-900 dark:text-white font-semibold">{resetConfirm?.username}</strong>?
+              </span>
+              <div className="bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 p-3 rounded-md text-xs text-amber-900 dark:text-amber-200">
+                The password will be reset to default: <strong className="font-mono bg-amber-100 dark:bg-amber-900/60 px-1.5 py-0.5 rounded text-amber-950 dark:text-amber-100">password123</strong>
+              </div>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setResetConfirm(null)} disabled={isResetting}>Cancel</Button>
+            <Button 
+              onClick={confirmResetPassword} 
+              disabled={isResetting} 
+              className="bg-amber-600 hover:bg-amber-700 text-white font-medium"
+            >
+              {isResetting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RotateCcw className="mr-2 h-4 w-4" />} Reset Password
             </Button>
           </DialogFooter>
         </DialogContent>
