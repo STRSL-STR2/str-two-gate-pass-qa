@@ -37,23 +37,27 @@ export default function Login() {
     }
 
     try {
-      const { data, error: signInError } = await supabase
-        .from('app_users')
-        .select('*')
-        .ilike('username', username)
-        .eq('plain_password', password)
-        .single();
+      const { data: users, error: signInError } = await supabase.rpc('login_user', {
+        p_username: username.trim(),
+        p_password: password
+      });
 
-      if (signInError || !data) {
+      if (signInError) {
+        throw signInError;
+      }
+
+      if (!users || users.length === 0) {
         throw new Error("Invalid username or password");
       }
+
+      const userData = users[0];
       
-      if (!data.is_active) {
+      if (!userData.is_active) {
         throw new Error("Account has been disabled. Please contact admin.");
       }
 
-      signIn(data);
-      if (data.role === 'viewer') {
+      signIn(userData);
+      if (userData.role === 'viewer') {
         navigate("/gate-pass/records");
       } else {
         navigate("/dashboard");

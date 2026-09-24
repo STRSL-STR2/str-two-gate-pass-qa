@@ -36,29 +36,20 @@ export default function Profile() {
 
     setIsChangingPassword(true);
     try {
-      // First verify current password
-      const { data: userRec, error: fetchErr } = await supabase
-        .from('app_users')
-        .select('plain_password')
-        .eq('id', profile.id)
-        .single();
-        
-      if (fetchErr) throw fetchErr;
-      
-      if (userRec.plain_password !== currentPassword) {
+      const { data: success, error: rpcErr } = await supabase.rpc('change_user_password', {
+        p_user_id: profile.id,
+        p_current_password: currentPassword,
+        p_new_password: newPassword
+      });
+
+      if (rpcErr) throw rpcErr;
+
+      if (!success) {
         toast.error("Current password is incorrect.");
         setIsChangingPassword(false);
         return;
       }
 
-      // Assuming straightforward update on app_users table matching the original logic
-      const { error } = await supabase
-        .from('app_users')
-        .update({ plain_password: newPassword })
-        .eq('id', profile.id);
-
-      if (error) throw error;
-      
       toast.success("Password updated successfully!");
       setCurrentPassword("");
       setNewPassword("");
