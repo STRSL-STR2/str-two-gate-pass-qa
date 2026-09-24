@@ -7,8 +7,7 @@ import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
-import { Search, Loader2, Printer, Eye, Trash2, Edit, Download, CheckCircle, AlertTriangle, Truck } from "lucide-react";
+import { Search, Loader2, Printer, Eye, Trash2, Edit, Download, CheckCircle, AlertTriangle, Truck, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { format, isToday, isThisWeek, isThisMonth, isWithinInterval, startOfDay, endOfDay } from "date-fns";
 import { useReactToPrint } from "react-to-print";
@@ -39,10 +38,14 @@ export default function GatePassRecords() {
   const [customEndDate, setCustomEndDate] = useState<string>("");
   const [completedFilter, setCompletedFilter] = useState("all");
 
+  // Pagination State (100 rows limit)
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 100;
+
   // View/Print Dialog State
   const [viewingRecord, setViewingRecord] = useState<GatePassRecord | null>(null);
   const [editingRecord, setEditingRecord] = useState<GatePassRecord | null>(null);
-    const [completeConfirmOpen, setCompleteConfirmOpen] = useState(false);
+  const [completeConfirmOpen, setCompleteConfirmOpen] = useState(false);
   const [dispatchConfirmOpen, setDispatchConfirmOpen] = useState(false);
   const [actionRecord, setActionRecord] = useState<GatePassRecord | null>(null);
   const [companySettings, setCompanySettings] = useState<CompanySettings | null>(null);
@@ -236,6 +239,16 @@ export default function GatePassRecords() {
     });
   }, [data, searchTerm, dateFilter, customStartDate, customEndDate, completedFilter, sortField, sortDirection]);
 
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, dateFilter, customStartDate, customEndDate, completedFilter, sortField, sortDirection]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredData.length / pageSize));
+  const paginatedData = useMemo(() => {
+    const startIndex = (currentPage - 1) * pageSize;
+    return filteredData.slice(startIndex, startIndex + pageSize);
+  }, [filteredData, currentPage, pageSize]);
+
   const companyLogo = companySettings?.logo_url || localStorage.getItem('gate_pass_logo');
 
   return (
@@ -352,7 +365,7 @@ export default function GatePassRecords() {
                 </TableCell>
               </TableRow>
             ) : (
-              filteredData.map((row) => (
+              paginatedData.map((row) => (
                 <TableRow key={row.id}>
                   <TableCell className="font-semibold text-primary">{row.gate_pass_no}</TableCell>
                   <TableCell>
@@ -447,6 +460,65 @@ export default function GatePassRecords() {
           </TableBody>
         </Table>
       </div>
+
+      {/* Pagination Controls */}
+      {filteredData.length > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-2 bg-slate-50 dark:bg-slate-900/40 rounded-xl border border-slate-200 dark:border-slate-800 text-xs text-muted-foreground shrink-0 shadow-sm">
+          <div>
+            Showing <span className="font-semibold text-foreground">{(currentPage - 1) * pageSize + 1}</span> to{" "}
+            <span className="font-semibold text-foreground">{Math.min(currentPage * pageSize, filteredData.length)}</span> of{" "}
+            <span className="font-semibold text-foreground">{filteredData.length}</span> records
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-8 w-8"
+              onClick={() => setCurrentPage(1)}
+              disabled={currentPage === 1}
+              title="First Page"
+            >
+              <ChevronsLeft className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-8 w-8"
+              onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+              disabled={currentPage === 1}
+              title="Previous Page"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+
+            <span className="px-3 py-1 font-medium text-foreground">
+              Page {currentPage} of {totalPages}
+            </span>
+
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-8 w-8"
+              onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+              disabled={currentPage === totalPages}
+              title="Next Page"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-8 w-8"
+              onClick={() => setCurrentPage(totalPages)}
+              disabled={currentPage === totalPages}
+              title="Last Page"
+            >
+              <ChevronsRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* View / Print Modal */}
       <Dialog open={!!viewingRecord} onOpenChange={(open) => !open && setViewingRecord(null)}>

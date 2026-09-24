@@ -10,10 +10,11 @@ import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Download, Loader2, AlertTriangle, FileCheck2, ShieldAlert, ArrowUpDown, ChevronUp, ChevronDown } from "lucide-react";
+import { Download, Loader2, AlertTriangle, FileCheck2, ShieldAlert, ArrowUpDown, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import * as XLSX from "xlsx";
+import { format, isToday, isThisWeek, isThisMonth, isWithinInterval, startOfDay, endOfDay } from "date-fns";
 
 export default function InvoiceRecords() {
   const navigate = useNavigate();
@@ -25,6 +26,15 @@ export default function InvoiceRecords() {
   const [sortField, setSortField] = useState<keyof MasterDataRow | "status">("invoice");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   
+  // Date Range Filter States (Default: this-week)
+  const [dateFilter, setDateFilter] = useState("this-week");
+  const [customStartDate, setCustomStartDate] = useState("");
+  const [customEndDate, setCustomEndDate] = useState("");
+
+  // Pagination states (100 rows limit)
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 100;
+
   // Dialog states for gate pass creation warnings
   const [showWarningModal, setShowWarningModal] = useState(false);
   const [warningMessage, setWarningMessage] = useState("");
@@ -53,6 +63,28 @@ export default function InvoiceRecords() {
     }
 
     return dateStr;
+  };
+
+  const parseInvoiceDate = (dateVal: any): Date | null => {
+    if (!dateVal) return null;
+    const dateStr = String(dateVal).trim();
+    if (!dateStr || dateStr === "-") return null;
+
+    // Excel numeric date serial
+    if (/^\d+(\.\d+)?$/.test(dateStr)) {
+      const serial = parseFloat(dateStr);
+      if (serial > 30000 && serial < 60000) {
+        const utc_days = Math.floor(serial - 25569);
+        const utc_value = utc_days * 86400;
+        return new Date(utc_value * 1000);
+      }
+    }
+
+    const parsed = Date.parse(dateStr);
+    if (!isNaN(parsed)) {
+      return new Date(parsed);
+    }
+    return null;
   };
 
   const fetchData = async () => {
@@ -140,7 +172,7 @@ export default function InvoiceRecords() {
     const ws = XLSX.utils.json_to_sheet(exportRows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "MasterData");
-    XLSX.writeFile(wb, "Stretchline_Invoice_Records.xlsx");
+    XLSX.writeFile(wb, `Stretchline_Invoice_Records_${format(new Date(), 'yyyy-MM-dd')}.xlsx`);
   };
 
   const handleSort = (field: keyof MasterDataRow | "status") => {
@@ -207,6 +239,31 @@ export default function InvoiceRecords() {
         if (postedFilter === "posted" && !isPosted) return false;
         if (postedFilter === "not-posted" && isPosted) return false;
       }
+
+      if (dateFilter !== "all") {
+        const rowDate = parseInvoiceDate(row.invoice_date);
+        if (!rowDate) return false;
+
+        if (dateFilter === "today") {
+          if (!isToday(rowDate)) return false;
+        } else if (dateFilter === "this-week") {
+          if (!isThisWeek(rowDate, { weekStartsOn: 1 })) return false;
+        } else if (dateFilter === "this-month") {
+          if (!isThisMonth(rowDate)) return false;
+        } else if (dateFilter === "custom") {
+          if (customStartDate && customEndDate) {
+            const start = startOfDay(new Date(customStartDate));
+            const end = endOfDay(new Date(customEndDate));
+            if (!isWithinInterval(rowDate, { start, end })) return false;
+          } else if (customStartDate) {
+            const start = startOfDay(new Date(customStartDate));
+            if (rowDate < start) return false;
+          } else if (customEndDate) {
+            const end = endOfDay(new Date(customEndDate));
+            if (rowDate > end) return false;
+          }
+        }
+      }
       
       return true;
     });
@@ -255,7 +312,17 @@ export default function InvoiceRecords() {
       if (aStr > bStr) return sortDirection === "asc" ? 1 : -1;
       return 0;
     });
-  }, [data, searchTerm, postedFilter, sortField, sortDirection]);
+  }, [data, searchTerm, postedFilter, dateFilter, customStartDate, customEndDate, sortField, sortDirection]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, postedFilter, dateFilter, customStartDate, customEndDate, sortField, sortDirection]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredData.length / pageSize));
+  const paginatedData = useMemo(() => {
+    const startIndex = (currentPage - 1) * pageSize;
+    return filteredData.slice(startIndex, startIndex + pageSize);
+  }, [filteredData, currentPage, pageSize]);
 
   const handleToggleInvoice = (invoice: string, customerName: string, gatePassIssued: string | null | undefined, hasRmaWarning: boolean) => {
     if (selectedInvoices.includes(invoice)) {
@@ -305,30 +372,44 @@ export default function InvoiceRecords() {
       return;
     }
 
-    // Double check with database to be strictly safe
+    // Double check with database using fast RPC
     try {
-      const { data: gpRecords, error } = await supabase
-        .from('gate_pass_records')
-        .select('gate_pass_no, rows');
-        
-      if (!error && gpRecords) {
-        let existingGpNo = null;
-        let existingInvoice = null;
-        
-        outer: for (const gp of gpRecords) {
-          const rows = gp.rows as any[];
-          for (const row of rows) {
-            if (selectedInvoices.includes(row.invoice)) {
-              existingGpNo = gp.gate_pass_no;
-              existingInvoice = row.invoice;
-              break outer;
+      const invoiceList = selectedInvoices.map(inv => String(inv).trim()).filter(Boolean);
+      const { data: duplicateData, error: rpcErr } = await supabase.rpc('check_duplicate_invoices', {
+        target_invoices: invoiceList
+      });
+
+      if (!rpcErr && duplicateData && duplicateData.length > 0) {
+        const dup = duplicateData[0];
+        toast.error(`Blocked: Invoice ${dup.invoice} was already used in Gate Pass [${dup.gate_pass_no}].`);
+        return;
+      }
+
+      // Fallback
+      if (rpcErr) {
+        const { data: gpRecords, error } = await supabase
+          .from('gate_pass_records')
+          .select('gate_pass_no, rows');
+          
+        if (!error && gpRecords) {
+          let existingGpNo = null;
+          let existingInvoice = null;
+          
+          outer: for (const gp of gpRecords) {
+            const rows = gp.rows as any[];
+            for (const row of rows) {
+              if (selectedInvoices.includes(row.invoice)) {
+                existingGpNo = gp.gate_pass_no;
+                existingInvoice = row.invoice;
+                break outer;
+              }
             }
           }
-        }
 
-        if (existingGpNo) {
-          toast.error(`Blocked: Invoice ${existingInvoice} was already used in Gate Pass [${existingGpNo}] by another user.`);
-          return;
+          if (existingGpNo) {
+            toast.error(`Blocked: Invoice ${existingInvoice} was already used in Gate Pass [${existingGpNo}] by another user.`);
+            return;
+          }
         }
       }
     } catch (e) {
@@ -357,6 +438,39 @@ export default function InvoiceRecords() {
           />
         </div>
         <div className="flex items-center gap-2 border-l border-slate-300 dark:border-slate-700 pl-3">
+          <span className="text-xs font-medium text-muted-foreground whitespace-nowrap">Range:</span>
+          <select
+            value={dateFilter}
+            onChange={(e) => setDateFilter(e.target.value)}
+            className="h-9 rounded-md border border-input bg-background/80 dark:bg-slate-950 px-2 py-1 text-xs shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring cursor-pointer"
+          >
+            <option value="all">All Time</option>
+            <option value="today">Today</option>
+            <option value="this-week">This Week</option>
+            <option value="this-month">This Month</option>
+            <option value="custom">Date</option>
+          </select>
+        </div>
+
+        {(dateFilter === 'custom' || customStartDate || customEndDate) && (
+          <div className="flex items-center gap-2 animate-in fade-in duration-200">
+            <input
+              type="date"
+              value={customStartDate}
+              onChange={(e) => { setCustomStartDate(e.target.value); setDateFilter('custom'); }}
+              className="h-9 rounded-md border border-input bg-background/80 dark:bg-slate-950 px-2 py-1 text-xs shadow-sm"
+            />
+            <span className="text-xs text-muted-foreground">to</span>
+            <input
+              type="date"
+              value={customEndDate}
+              onChange={(e) => { setCustomEndDate(e.target.value); setDateFilter('custom'); }}
+              className="h-9 rounded-md border border-input bg-background/80 dark:bg-slate-950 px-2 py-1 text-xs shadow-sm"
+            />
+          </div>
+        )}
+
+        <div className="flex items-center gap-2 border-l border-slate-300 dark:border-slate-700 pl-3">
           <span className="text-xs font-medium text-muted-foreground whitespace-nowrap">Status:</span>
           <select
             value={postedFilter}
@@ -376,8 +490,6 @@ export default function InvoiceRecords() {
             <Download className="mr-2 h-4 w-4" />
             Export to Excel
           </Button>
-
-
         </div>
       </div>
 
@@ -531,7 +643,7 @@ export default function InvoiceRecords() {
                   </TableCell>
                 </TableRow>
               ) : (
-                filteredData.map((row) => {
+                paginatedData.map((row) => {
                   const isSelected = selectedInvoices.includes(row.invoice);
                   const isIssued = !!row.gate_pass_issued;
                   return (
@@ -582,6 +694,65 @@ export default function InvoiceRecords() {
             </TableBody>
           </Table>
       </div>
+
+      {/* Pagination Controls */}
+      {filteredData.length > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-2 bg-slate-50 dark:bg-slate-900/40 rounded-xl border border-slate-200 dark:border-slate-800 text-xs text-muted-foreground shrink-0 shadow-sm">
+          <div>
+            Showing <span className="font-semibold text-foreground">{(currentPage - 1) * pageSize + 1}</span> to{" "}
+            <span className="font-semibold text-foreground">{Math.min(currentPage * pageSize, filteredData.length)}</span> of{" "}
+            <span className="font-semibold text-foreground">{filteredData.length}</span> invoices
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-8 w-8"
+              onClick={() => setCurrentPage(1)}
+              disabled={currentPage === 1}
+              title="First Page"
+            >
+              <ChevronsLeft className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-8 w-8"
+              onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+              disabled={currentPage === 1}
+              title="Previous Page"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+
+            <span className="px-3 py-1 font-medium text-foreground">
+              Page {currentPage} of {totalPages}
+            </span>
+
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-8 w-8"
+              onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+              disabled={currentPage === totalPages}
+              title="Next Page"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-8 w-8"
+              onClick={() => setCurrentPage(totalPages)}
+              disabled={currentPage === totalPages}
+              title="Last Page"
+            >
+              <ChevronsRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      )}
 
       <Dialog open={showWarningModal} onOpenChange={setShowWarningModal}>
         <DialogContent>

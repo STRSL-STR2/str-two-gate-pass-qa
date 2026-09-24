@@ -237,30 +237,47 @@ export function EditGatePassModal({ record, onClose, onSaved }: Props) {
     
     setSaving(true);
 
-    // Double check with database to enforce strict validation against other saved records.
+    // Double check with database using fast RPC function
     try {
-      const { data: allGps, error: err } = await supabase
-        .from('gate_pass_records')
-        .select('id, gate_pass_no, rows')
-        .neq('id', editedRecord.id);
+      const invoiceList = editedRecord.rows.map(r => String(r.invoice).trim()).filter(Boolean);
+      const { data: duplicateData, error: rpcErr } = await supabase.rpc('check_duplicate_invoices', {
+        target_invoices: invoiceList
+      });
 
-      if (!err && allGps) {
-        let existingGpNo = null;
-        let existingInvoice = null;
-        outer: for (const gp of allGps) {
-          const rows = gp.rows as any[];
-          for (const row of rows) {
-            if (editedRecord.rows.some(er => er.invoice === row.invoice)) {
-              existingGpNo = gp.gate_pass_no;
-              existingInvoice = row.invoice;
-              break outer;
-            }
-          }
-        }
-        if (existingGpNo) {
-          toast.error(`Cannot save: Invoice ${existingInvoice} already exists in Gate Pass ${existingGpNo}.`);
+      if (!rpcErr && duplicateData && duplicateData.length > 0) {
+        const otherDup = duplicateData.find((d: any) => d.gate_pass_no !== editedRecord.gate_pass_no);
+        if (otherDup) {
+          toast.error(`Cannot save: Invoice ${otherDup.invoice} already exists in Gate Pass ${otherDup.gate_pass_no}.`);
           setSaving(false);
           return;
+        }
+      }
+
+      // Fallback
+      if (rpcErr) {
+        const { data: allGps, error: err } = await supabase
+          .from('gate_pass_records')
+          .select('id, gate_pass_no, rows')
+          .neq('id', editedRecord.id);
+
+        if (!err && allGps) {
+          let existingGpNo = null;
+          let existingInvoice = null;
+          outer: for (const gp of allGps) {
+            const rows = gp.rows as any[];
+            for (const row of rows) {
+              if (editedRecord.rows.some(er => er.invoice === row.invoice)) {
+                existingGpNo = gp.gate_pass_no;
+                existingInvoice = row.invoice;
+                break outer;
+              }
+            }
+          }
+          if (existingGpNo) {
+            toast.error(`Cannot save: Invoice ${existingInvoice} already exists in Gate Pass ${existingGpNo}.`);
+            setSaving(false);
+            return;
+          }
         }
       }
     } catch(e) {

@@ -45,6 +45,11 @@
   tfoot {
     display: table-footer-group;
   }
+  .print-avoid-break,
+  .print\:break-inside-avoid {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
 }@import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
