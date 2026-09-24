@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS public.app_users (
     username TEXT NOT NULL UNIQUE,
     email TEXT,
     password_hash TEXT NOT NULL,
-    role TEXT NOT NULL DEFAULT 'user',
+    role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('super_admin', 'admin', 'user', 'viewer')),
     is_active BOOLEAN NOT NULL DEFAULT true,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -86,6 +86,17 @@ CREATE TABLE IF NOT EXISTS public.gate_pass_records (
     total_value NUMERIC DEFAULT 0,
     total_cartons NUMERIC DEFAULT 0,
     invoice_count INT DEFAULT 0
+);
+
+-- G. Audit & Activity Logs Table (audit_logs)
+CREATE TABLE IF NOT EXISTS public.audit_logs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    action TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT,
+    details JSONB NOT NULL DEFAULT '{}'::jsonb,
+    performed_by TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- ----------------------------------------------------------------------------
@@ -188,6 +199,10 @@ BEGIN
 
     IF EXISTS (SELECT 1 FROM public.app_users WHERE lower(username) = lower(trim(p_username))) THEN
         RAISE EXCEPTION 'Username "%" is already taken.', trim(p_username);
+    END IF;
+
+    IF p_role NOT IN ('super_admin', 'admin', 'user', 'viewer') THEN
+        p_role := 'user';
     END IF;
 
     INSERT INTO public.app_users (
@@ -335,6 +350,7 @@ ALTER TABLE public.delivery_locations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.drivers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.time_slots ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.gate_pass_records ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.audit_logs ENABLE ROW LEVEL SECURITY;
 
 -- Clean existing policies
 DROP POLICY IF EXISTS "Allow read app_users" ON public.app_users;
@@ -349,6 +365,7 @@ DROP POLICY IF EXISTS "Allow select gate_pass_records" ON public.gate_pass_recor
 DROP POLICY IF EXISTS "Allow insert gate_pass_records" ON public.gate_pass_records;
 DROP POLICY IF EXISTS "Allow update gate_pass_records" ON public.gate_pass_records;
 DROP POLICY IF EXISTS "Allow all for gate_pass_records" ON public.gate_pass_records;
+DROP POLICY IF EXISTS "Allow all for audit_logs" ON public.audit_logs;
 
 -- A. app_users Policies
 -- Safe SELECT of user metadata allowed for UI listing
@@ -417,7 +434,14 @@ FOR UPDATE
 TO anon, authenticated 
 USING (true) 
 WITH CHECK (true);
--- Note: Direct DELETE is blocked to preserve immutable audit trail
+
+-- E. audit_logs Policies
+CREATE POLICY "Allow all for audit_logs" 
+ON public.audit_logs 
+FOR ALL 
+TO anon, authenticated 
+USING (true) 
+WITH CHECK (true);
 
 -- ----------------------------------------------------------------------------
 -- 5. RPC EXECUTION PERMISSIONS
@@ -437,15 +461,19 @@ CREATE INDEX IF NOT EXISTS idx_gate_pass_records_rows ON public.gate_pass_record
 CREATE INDEX IF NOT EXISTS idx_gate_pass_records_created_at ON public.gate_pass_records (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_gate_pass_records_gp_no ON public.gate_pass_records (gate_pass_no);
 CREATE INDEX IF NOT EXISTS idx_app_users_username ON public.app_users (lower(username));
+CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON public.audit_logs (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON public.audit_logs (action);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_entity ON public.audit_logs (entity_type, entity_id);
 
 -- ----------------------------------------------------------------------------
 -- 7. INITIAL MASTER DATA (DEFAULT ADMIN ONLY)
 -- ----------------------------------------------------------------------------
--- Insert or update default system administrator ('admin' / 'admin123')
+-- Insert or update default system administrator ('admin' / 'admin123' as super_admin)
 INSERT INTO public.app_users (username, password_hash, role, is_active)
-VALUES ('admin', crypt('admin123', gen_salt('bf'::text, 10)), 'admin', true)
+VALUES ('admin', crypt('admin123', gen_salt('bf'::text, 10)), 'super_admin', true)
 ON CONFLICT (username) DO UPDATE 
-SET password_hash = crypt('admin123', gen_salt('bf'::text, 10))
+SET role = 'super_admin',
+    password_hash = crypt('admin123', gen_salt('bf'::text, 10))
 WHERE public.app_users.password_hash IS NULL OR public.app_users.password_hash = '';
 
 -- Initialize empty default company settings record if none exists

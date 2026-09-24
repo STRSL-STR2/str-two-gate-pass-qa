@@ -33,7 +33,7 @@ function ProtectedRoute({ children, requireAdmin = false, requireNonViewer = fal
     return <Navigate to="/" replace />;
   }
 
-  if (requireAdmin && profile?.role !== 'admin') {
+  if (requireAdmin && profile?.role !== 'admin' && profile?.role !== 'super_admin') {
     return (
       <div className="h-screen w-full flex items-center justify-center flex-col">
         <h1 className="text-2xl font-bold mb-2">Access Denied</h1>

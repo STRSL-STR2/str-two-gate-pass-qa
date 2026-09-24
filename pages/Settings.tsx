@@ -1,15 +1,23 @@
-import { useEffect, useState, useRef, DragEvent } from "react";
+import { useEffect, useState, useRef, useMemo, DragEvent } from "react";
 import localforage from "localforage";
 import * as XLSX from "xlsx";
+import { format } from "date-fns";
 import { supabase } from "@/lib/supabase";
 import { toast } from "sonner";
-import { CompanySettings, Driver, Location, TimeSlot, Profile } from "@/types";
+import { useAuth } from "@/context/AuthContext";
+import { CompanySettings, Driver, Location, TimeSlot, Profile, AuditLog } from "@/types";
+import { logAuditActivity } from "@/lib/audit";
 import { Card, CardContent, CardDescription, CardTitle, CardFooter } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Loader2, Plus, Trash2, Save, UploadCloud, AlertTriangle, Download, RotateCcw } from "lucide-react";
+import { 
+  Loader2, Plus, Trash2, Save, UploadCloud, AlertTriangle, Download, RotateCcw, 
+  ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Search, RefreshCw, 
+  FileText, Undo2, Shield 
+} from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface FileUploaderProps {
@@ -149,10 +157,22 @@ export default function Settings() {
   const [activeTab, setActiveTab] = useState("company");
   const [companySettings, setCompanySettings] = useState<CompanySettings | null>(null);
   const [signature, setSignature] = useState<string | null>(null);
+  const { profile } = useAuth();
   const [drivers, setDrivers] = useState<Driver[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
   const [timeSlots, setTimeSlots] = useState<TimeSlot[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
+
+  // Activity Logs states
+  const [logs, setLogs] = useState<AuditLog[]>([]);
+  const [loadingLogs, setLoadingLogs] = useState(false);
+  const [logSearch, setLogSearch] = useState("");
+  const [logActionFilter, setLogActionFilter] = useState("all");
+  const [logDateFilter, setLogDateFilter] = useState("all");
+  const [logCustomStartDate, setLogCustomStartDate] = useState("");
+  const [logCustomEndDate, setLogCustomEndDate] = useState("");
+  const [logCurrentPage, setLogCurrentPage] = useState(1);
+  const logPageSize = 100;
 
   // New item states
   const [newDriver, setNewDriver] = useState({ driver_name: "", vehicle_number: "", phone_number: "", nic: "" });
@@ -168,6 +188,114 @@ export default function Settings() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [resetConfirm, setResetConfirm] = useState<{ id: string, username: string } | null>(null);
   const [isResetting, setIsResetting] = useState(false);
+
+  const fetchLogs = async () => {
+    setLoadingLogs(true);
+    try {
+      const { data, error } = await supabase
+        .from('audit_logs')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(2000);
+      if (error) throw error;
+      setLogs((data as AuditLog[]) || []);
+    } catch (err: any) {
+      console.error("Error fetching audit logs:", err);
+      toast.error(`Error loading activity logs: ${err.message}`);
+    } finally {
+      setLoadingLogs(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === "logs") {
+      fetchLogs();
+    }
+  }, [activeTab]);
+
+  const filteredLogs = useMemo(() => {
+    return logs.filter(log => {
+      // Search filter
+      if (logSearch.trim()) {
+        const q = logSearch.toLowerCase();
+        const matchUser = (log.performed_by || '').toLowerCase().includes(q);
+        const matchAction = (log.action || '').toLowerCase().includes(q);
+        const matchEntity = (log.entity_id || '').toLowerCase().includes(q) || (log.entity_type || '').toLowerCase().includes(q);
+        const matchDetails = JSON.stringify(log.details || {}).toLowerCase().includes(q);
+        if (!matchUser && !matchAction && !matchEntity && !matchDetails) return false;
+      }
+
+      // Action filter
+      if (logActionFilter !== 'all') {
+        if (logActionFilter === 'reversals') {
+          if (log.action !== 'GATE_PASS_UNPOSTED' && log.action !== 'GATE_PASS_UNDISPATCHED') return false;
+        } else if (logActionFilter === 'users') {
+          if (!log.action.startsWith('USER_')) return false;
+        } else if (logActionFilter === 'gatepass') {
+          if (!log.action.startsWith('GATE_PASS_')) return false;
+        } else if (log.action !== logActionFilter) {
+          return false;
+        }
+      }
+
+      // Date filter
+      if (logDateFilter !== 'all') {
+        const logDate = new Date(log.created_at);
+        const now = new Date();
+        if (logDateFilter === 'today') {
+          const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+          if (logDate < today) return false;
+        } else if (logDateFilter === 'this-week') {
+          const startOfWeek = new Date(now);
+          startOfWeek.setDate(now.getDate() - now.getDay());
+          startOfWeek.setHours(0, 0, 0, 0);
+          if (logDate < startOfWeek) return false;
+        } else if (logDateFilter === 'this-month') {
+          const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+          if (logDate < startOfMonth) return false;
+        } else if (logDateFilter === 'custom') {
+          if (logCustomStartDate) {
+            const start = new Date(logCustomStartDate);
+            start.setHours(0, 0, 0, 0);
+            if (logDate < start) return false;
+          }
+          if (logCustomEndDate) {
+            const end = new Date(logCustomEndDate);
+            end.setHours(23, 59, 59, 999);
+            if (logDate > end) return false;
+          }
+        }
+      }
+
+      return true;
+    });
+  }, [logs, logSearch, logActionFilter, logDateFilter, logCustomStartDate, logCustomEndDate]);
+
+  const totalLogPages = Math.ceil(filteredLogs.length / logPageSize) || 1;
+  const paginatedLogs = useMemo(() => {
+    const start = (logCurrentPage - 1) * logPageSize;
+    return filteredLogs.slice(start, start + logPageSize);
+  }, [filteredLogs, logCurrentPage, logPageSize]);
+
+  const handleExportLogsExcel = () => {
+    if (filteredLogs.length === 0) {
+      toast.error("No activity logs to export.");
+      return;
+    }
+    const exportData = filteredLogs.map(l => ({
+      "Timestamp": format(new Date(l.created_at), 'yyyy-MM-dd HH:mm:ss'),
+      "Performed By": l.performed_by || "System",
+      "Action": l.action,
+      "Entity Type": l.entity_type || "-",
+      "Entity ID": l.entity_id || "-",
+      "Details": JSON.stringify(l.details || {})
+    }));
+    const ws = XLSX.utils.json_to_sheet(exportData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Activity Logs");
+    XLSX.writeFile(wb, `System_Activity_Logs_${format(new Date(), 'yyyy-MM-dd')}.xlsx`);
+    toast.success("Activity logs exported successfully.");
+  };
 
   const fetchData = async () => {
     setLoading(true);
@@ -407,6 +535,26 @@ export default function Settings() {
         XLSX.utils.book_append_sheet(wb, wsMaster, "Master Invoices");
       }
 
+      // 8. Fetch Audit Logs
+      const { data: auditLogs } = await supabase
+        .from('audit_logs')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(5000);
+
+      if (auditLogs && auditLogs.length > 0) {
+        const formattedLogs = auditLogs.map(l => ({
+          "Timestamp": l.created_at ? new Date(l.created_at).toLocaleString() : "-",
+          "Performed By": l.performed_by || "System",
+          "Action": l.action,
+          "Entity Type": l.entity_type || "-",
+          "Entity ID": l.entity_id || "-",
+          "Details": JSON.stringify(l.details || {})
+        }));
+        const wsLogs = XLSX.utils.json_to_sheet(formattedLogs);
+        XLSX.utils.book_append_sheet(wb, wsLogs, "Activity Logs");
+      }
+
       // Auto-fit column widths for every worksheet
       for (const sheetName of wb.SheetNames) {
         const ws = wb.Sheets[sheetName];
@@ -549,6 +697,14 @@ export default function Settings() {
 
       if (error) throw error;
       
+      await logAuditActivity({
+        action: 'USER_CREATED',
+        entity_type: 'user',
+        entity_id: newUsername.trim(),
+        details: { role: newUserRole, email: newUserEmail.trim() || null },
+        performed_by: profile?.username || 'Admin'
+      });
+
       toast.success("User created successfully.");
       setNewUsername("");
       setNewUserEmail("");
@@ -582,11 +738,21 @@ export default function Settings() {
         setTimeSlots(timeSlots.filter(d => d.id !== id));
         toast.success("Time slot deleted");
       } else if (type === 'user') {
+        const targetUser = profiles.find(p => p.id === id);
         const { error: rpcErr } = await supabase.rpc('admin_delete_user', { p_user_id: id });
         if (rpcErr) {
           const { error } = await supabase.from('app_users').delete().eq('id', id);
           if (error) throw error;
         }
+
+        await logAuditActivity({
+          action: 'USER_DELETED',
+          entity_type: 'user',
+          entity_id: targetUser?.username || id,
+          details: { role: targetUser?.role },
+          performed_by: profile?.username || 'Admin'
+        });
+
         setProfiles(profiles.filter(p => p.id !== id));
         toast.success("User deleted successfully.");
       }
@@ -609,6 +775,14 @@ export default function Settings() {
 
       if (rpcErr) throw rpcErr;
       
+      await logAuditActivity({
+        action: 'USER_PASSWORD_RESET',
+        entity_type: 'user',
+        entity_id: resetConfirm.username,
+        details: { reset_to_default: true },
+        performed_by: profile?.username || 'Admin'
+      });
+
       toast.success(`Password for ${resetConfirm.username} reset to 'password123'`);
       setResetConfirm(null);
     } catch (err: any) {
@@ -632,6 +806,7 @@ export default function Settings() {
             { id: "locations", label: "Locations" },
             { id: "times", label: "Time Slots" },
             { id: "users", label: "System Users" },
+            { id: "logs", label: "Activity Logs" },
             { id: "backup", label: "System Backup" }
           ].map(tab => (
             <button
@@ -944,6 +1119,7 @@ export default function Settings() {
                     >
                       <option value="user">User</option>
                       <option value="admin">Admin</option>
+                      <option value="super_admin">Super Admin</option>
                       <option value="viewer">Viewer</option>
                     </select>
                   </div>
@@ -971,8 +1147,14 @@ export default function Settings() {
                         <TableCell className="font-medium">{p.username}</TableCell>
                         <TableCell className="text-slate-500">{p.email || '-'}</TableCell>
                         <TableCell>
-                          <span className={`px-2.5 py-1 rounded-full text-xs font-medium border ${p.role === 'admin' ? 'bg-indigo-50 border-indigo-200 text-indigo-700 dark:bg-indigo-950/40 dark:border-indigo-800 dark:text-indigo-300' : 'bg-slate-100 border-slate-200 text-slate-600 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300 capitalize'}`}>
-                            {p.role}
+                          <span className={`px-2.5 py-1 rounded-full text-xs font-medium border ${
+                            p.role === 'super_admin'
+                              ? 'bg-purple-50 border-purple-200 text-purple-700 dark:bg-purple-950/40 dark:border-purple-800 dark:text-purple-300'
+                              : p.role === 'admin'
+                                ? 'bg-indigo-50 border-indigo-200 text-indigo-700 dark:bg-indigo-950/40 dark:border-indigo-800 dark:text-indigo-300'
+                                : 'bg-slate-100 border-slate-200 text-slate-600 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300 capitalize'
+                          }`}>
+                            {p.role === 'super_admin' ? 'Super Admin' : p.role}
                           </span>
                         </TableCell>
                         <TableCell>
@@ -1002,6 +1184,278 @@ export default function Settings() {
             </CardContent>
           </Card>
         </div>)}
+
+        {/* Activity & Audit Logs */}
+        {activeTab === "logs" && (
+          <div className="flex flex-col h-full overflow-hidden">
+            <Card className="border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden flex flex-col h-full">
+              {/* Header & Controls */}
+              <div className="px-4 py-2.5 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/20 shrink-0 flex flex-col md:flex-row gap-2 justify-between items-start md:items-center">
+                <div>
+                  <CardTitle className="text-sm font-semibold flex items-center gap-1.5">
+                    <Shield className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+                    Activity & Audit Trail
+                  </CardTitle>
+                  <CardDescription className="text-xs text-slate-500">
+                    Real-time audit log of gate pass dispatches, postings, reversals, uploads, and user actions.
+                  </CardDescription>
+                </div>
+                <div className="flex items-center gap-2 self-end md:self-auto">
+                  <Badge variant="secondary" className="px-2.5 py-0.5 text-xs font-medium whitespace-nowrap">
+                    {filteredLogs.length} Events
+                  </Badge>
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    className="h-8 text-xs"
+                    onClick={fetchLogs}
+                    disabled={loadingLogs}
+                  >
+                    <RefreshCw className={`mr-1 h-3.5 w-3.5 ${loadingLogs ? 'animate-spin' : ''}`} /> Refresh
+                  </Button>
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    className="h-8 text-xs"
+                    onClick={handleExportLogsExcel}
+                    disabled={filteredLogs.length === 0}
+                  >
+                    <Download className="mr-1 h-3.5 w-3.5" /> Export Excel
+                  </Button>
+                </div>
+              </div>
+
+              {/* Filters toolbar */}
+              <div className="px-4 py-2 border-b border-slate-100 dark:border-slate-800 bg-slate-50/30 dark:bg-slate-900/30 shrink-0 flex flex-wrap gap-2 items-center">
+                {/* Search input */}
+                <div className="relative flex-1 min-w-[200px]">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                  <Input 
+                    value={logSearch} 
+                    onChange={e => { setLogSearch(e.target.value); setLogCurrentPage(1); }}
+                    placeholder="Search by Gate Pass #, User, Action, Reason..."
+                    className="h-8 pl-8 text-xs bg-white dark:bg-slate-950"
+                  />
+                  {logSearch && (
+                    <button 
+                      onClick={() => { setLogSearch(""); setLogCurrentPage(1); }}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                    >
+                      ×
+                    </button>
+                  )}
+                </div>
+
+                {/* Action filter */}
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs text-muted-foreground whitespace-nowrap">Action:</span>
+                  <select
+                    value={logActionFilter}
+                    onChange={e => { setLogActionFilter(e.target.value); setLogCurrentPage(1); }}
+                    className="h-8 rounded-md border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950 px-2 text-xs"
+                  >
+                    <option value="all">All Activities</option>
+                    <option value="reversals">Reversals & Rollbacks</option>
+                    <option value="GATE_PASS_UNPOSTED">Gate Pass Unposted</option>
+                    <option value="GATE_PASS_UNDISPATCHED">Revert to Pending</option>
+                    <option value="GATE_PASS_POSTED">Gate Pass Posted</option>
+                    <option value="GATE_PASS_DISPATCHED">Gate Pass Dispatched</option>
+                    <option value="GATE_PASS_DELETED">Gate Pass Deleted</option>
+                    <option value="GATE_PASS_CREATED">Gate Pass Created</option>
+                    <option value="DATA_UPLOADED">Master Data Uploaded</option>
+                    <option value="users">User Management</option>
+                    <option value="USER_LOGIN">User Logins</option>
+                  </select>
+                </div>
+
+                {/* Date filter */}
+                <div className="flex items-center gap-1.5 border-l border-slate-200 dark:border-slate-800 pl-2">
+                  <span className="text-xs text-muted-foreground whitespace-nowrap">Date:</span>
+                  <select
+                    value={logDateFilter}
+                    onChange={e => { setLogDateFilter(e.target.value); setLogCurrentPage(1); }}
+                    className="h-8 rounded-md border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950 px-2 text-xs"
+                  >
+                    <option value="all">All Time</option>
+                    <option value="today">Today</option>
+                    <option value="this-week">This Week</option>
+                    <option value="this-month">This Month</option>
+                    <option value="custom">Custom Date</option>
+                  </select>
+                </div>
+
+                {logDateFilter === 'custom' && (
+                  <div className="flex items-center gap-1.5 animate-in fade-in duration-150">
+                    <Input 
+                      type="date" 
+                      value={logCustomStartDate} 
+                      onChange={e => { setLogCustomStartDate(e.target.value); setLogCurrentPage(1); }}
+                      className="h-8 text-xs bg-white dark:bg-slate-950 w-32"
+                    />
+                    <span className="text-xs text-muted-foreground">to</span>
+                    <Input 
+                      type="date" 
+                      value={logCustomEndDate} 
+                      onChange={e => { setLogCustomEndDate(e.target.value); setLogCurrentPage(1); }}
+                      className="h-8 text-xs bg-white dark:bg-slate-950 w-32"
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* Table Body */}
+              <CardContent className="p-0 flex flex-col flex-1 overflow-hidden min-h-0">
+                <div className="flex-1 w-full overflow-auto relative">
+                  <Table className="min-w-[900px]">
+                    <TableHeader className="bg-slate-100 dark:bg-slate-900 sticky top-0 z-10">
+                      <TableRow className="hover:bg-transparent">
+                        <TableHead className="w-40 font-medium text-slate-600 dark:text-slate-400 text-xs">Date & Time</TableHead>
+                        <TableHead className="w-32 font-medium text-slate-600 dark:text-slate-400 text-xs">Performed By</TableHead>
+                        <TableHead className="w-44 font-medium text-slate-600 dark:text-slate-400 text-xs">Action</TableHead>
+                        <TableHead className="w-40 font-medium text-slate-600 dark:text-slate-400 text-xs">Target / Ref</TableHead>
+                        <TableHead className="font-medium text-slate-600 dark:text-slate-400 text-xs">Event Details & Reason</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {loadingLogs ? (
+                        <TableRow>
+                          <TableCell colSpan={5} className="h-48 text-center text-muted-foreground">
+                            <div className="flex flex-col items-center justify-center">
+                              <Loader2 className="h-6 w-6 animate-spin mb-2" />
+                              Loading activity logs...
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ) : paginatedLogs.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={5} className="h-48 text-center text-muted-foreground text-sm font-medium">
+                            No activity log entries found.
+                          </TableCell>
+                        </TableRow>
+                      ) : (
+                        paginatedLogs.map((log) => {
+                          const details = log.details || {};
+                          const reason = details.reason;
+                          return (
+                            <TableRow key={log.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-900/50 text-xs">
+                              <TableCell className="font-mono text-slate-600 dark:text-slate-400 whitespace-nowrap">
+                                {log.created_at ? format(new Date(log.created_at), 'yyyy-MM-dd HH:mm:ss') : '-'}
+                              </TableCell>
+                              <TableCell className="font-medium text-slate-800 dark:text-slate-200">
+                                <span className="bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded text-[11px] font-mono">
+                                  {log.performed_by || 'System'}
+                                </span>
+                              </TableCell>
+                              <TableCell>
+                                {log.action === 'GATE_PASS_POSTED' && <Badge className="bg-emerald-600 hover:bg-emerald-700 text-white text-[10px]">Posted</Badge>}
+                                {log.action === 'GATE_PASS_DISPATCHED' && <Badge className="bg-blue-600 hover:bg-blue-700 text-white text-[10px]">Dispatched</Badge>}
+                                {log.action === 'GATE_PASS_UNPOSTED' && <Badge className="bg-amber-600 hover:bg-amber-700 text-white text-[10px]">Unposted (Reversed)</Badge>}
+                                {log.action === 'GATE_PASS_UNDISPATCHED' && <Badge className="bg-orange-600 hover:bg-orange-700 text-white text-[10px]">Revert to Pending</Badge>}
+                                {log.action === 'GATE_PASS_DELETED' && <Badge className="bg-red-600 hover:bg-red-700 text-white text-[10px]">Gate Pass Deleted</Badge>}
+                                {log.action === 'GATE_PASS_CREATED' && <Badge className="bg-cyan-600 hover:bg-cyan-700 text-white text-[10px]">Created</Badge>}
+                                {log.action === 'DATA_UPLOADED' && <Badge className="bg-teal-600 hover:bg-teal-700 text-white text-[10px]">Data Upload</Badge>}
+                                {log.action === 'USER_LOGIN' && <Badge variant="outline" className="text-slate-600 border-slate-300 text-[10px]">Login</Badge>}
+                                {log.action === 'USER_CREATED' && <Badge className="bg-purple-600 hover:bg-purple-700 text-white text-[10px]">User Created</Badge>}
+                                {log.action === 'USER_PASSWORD_RESET' && <Badge className="bg-amber-500 hover:bg-amber-600 text-white text-[10px]">Password Reset</Badge>}
+                                {log.action === 'USER_DELETED' && <Badge className="bg-rose-600 hover:bg-rose-700 text-white text-[10px]">User Deleted</Badge>}
+                                {!['GATE_PASS_POSTED', 'GATE_PASS_DISPATCHED', 'GATE_PASS_UNPOSTED', 'GATE_PASS_UNDISPATCHED', 'GATE_PASS_DELETED', 'GATE_PASS_CREATED', 'DATA_UPLOADED', 'USER_LOGIN', 'USER_CREATED', 'USER_PASSWORD_RESET', 'USER_DELETED'].includes(log.action) && (
+                                  <Badge variant="secondary" className="text-[10px]">{log.action}</Badge>
+                                )}
+                              </TableCell>
+                              <TableCell className="font-semibold text-slate-700 dark:text-slate-300">
+                                {log.entity_id || '-'}
+                              </TableCell>
+                              <TableCell className="text-slate-600 dark:text-slate-400">
+                                <div className="space-y-0.5">
+                                  {reason && (
+                                    <div className="text-amber-700 dark:text-amber-400 font-medium">
+                                      <span className="font-semibold">Reason:</span> {reason}
+                                    </div>
+                                  )}
+                                  <div className="text-[11px] text-muted-foreground flex flex-wrap gap-x-3 gap-y-0.5">
+                                    {details.customer && <span>Customer: <strong>{details.customer}</strong></span>}
+                                    {details.vehicle_number && <span>Vehicle: <strong>{details.vehicle_number}</strong></span>}
+                                    {details.driver_name && <span>Driver: <strong>{details.driver_name}</strong></span>}
+                                    {details.total_cartons !== undefined && <span>Cartons: <strong>{details.total_cartons}</strong></span>}
+                                    {details.rows_count !== undefined && <span>Rows: <strong>{details.rows_count}</strong></span>}
+                                    {details.file_name && <span>File: <strong>{details.file_name}</strong></span>}
+                                    {details.role && <span>Role: <strong>{details.role}</strong></span>}
+                                    {details.previous_status && details.new_status && (
+                                      <span>Flow: {details.previous_status} → {details.new_status}</span>
+                                    )}
+                                  </div>
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })
+                      )}
+                    </TableBody>
+                  </Table>
+                </div>
+
+                {/* Footer matching InvoiceRecords.tsx pagination */}
+                {filteredLogs.length > 0 && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-1.5 bg-slate-50/90 dark:bg-slate-900/40 rounded-b-md border-t border-slate-200 dark:border-slate-800 text-[11px] text-muted-foreground shrink-0 shadow-xs mb-0">
+                    <div>
+                      Showing <span className="font-semibold text-foreground">{(logCurrentPage - 1) * logPageSize + 1}</span> to{" "}
+                      <span className="font-semibold text-foreground">{Math.min(logCurrentPage * logPageSize, filteredLogs.length)}</span> of{" "}
+                      <span className="font-semibold text-foreground">{filteredLogs.length}</span> activity logs
+                    </div>
+
+                    <div className="flex items-center gap-1">
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="h-7 w-7"
+                        onClick={() => setLogCurrentPage(1)}
+                        disabled={logCurrentPage === 1}
+                        title="First Page"
+                      >
+                        <ChevronsLeft className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="h-7 w-7"
+                        onClick={() => setLogCurrentPage(prev => Math.max(1, prev - 1))}
+                        disabled={logCurrentPage === 1}
+                        title="Previous Page"
+                      >
+                        <ChevronLeft className="h-3.5 w-3.5" />
+                      </Button>
+
+                      <span className="px-2 py-0.5 font-medium text-foreground">
+                        Page {logCurrentPage} of {totalLogPages}
+                      </span>
+
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="h-7 w-7"
+                        onClick={() => setLogCurrentPage(prev => Math.min(totalLogPages, prev + 1))}
+                        disabled={logCurrentPage === totalLogPages}
+                        title="Next Page"
+                      >
+                        <ChevronRight className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="h-7 w-7"
+                        onClick={() => setLogCurrentPage(totalLogPages)}
+                        disabled={logCurrentPage === totalLogPages}
+                        title="Last Page"
+                      >
+                        <ChevronsRight className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        )}
 
         {/* System Backup */}
         {activeTab === "backup" && (<div className="h-full overflow-y-auto pb-8 pr-2">

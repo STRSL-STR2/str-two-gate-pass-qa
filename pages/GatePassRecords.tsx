@@ -8,13 +8,14 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Search, Loader2, Printer, Eye, Trash2, Edit, Download, CheckCircle, AlertTriangle, Truck, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
+import { Search, Loader2, Printer, Eye, Trash2, Edit, Download, CheckCircle, AlertTriangle, Truck, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, RotateCcw, Undo2 } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { format, isToday, isThisWeek, isThisMonth, isWithinInterval, startOfDay, endOfDay } from "date-fns";
 import { useReactToPrint } from "react-to-print";
 import { CompanySettings } from "@/types";
 import * as XLSX from "xlsx";
 import { EditGatePassModal } from "@/components/EditGatePassModal";
+import { logAuditActivity } from "@/lib/audit";
 
 export default function GatePassRecords() {
   const { profile } = useAuth();
@@ -57,12 +58,19 @@ export default function GatePassRecords() {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [recordToDelete, setRecordToDelete] = useState<GatePassRecord | null>(null);
 
-  const isAdmin = profile?.role === 'admin';
+  // Super Admin Reversal States
+  const [unpostConfirmOpen, setUnpostConfirmOpen] = useState(false);
+  const [undispatchConfirmOpen, setUndispatchConfirmOpen] = useState(false);
+  const [reversalReason, setReversalReason] = useState("");
+  const [isProcessingAction, setIsProcessingAction] = useState(false);
+
+  const isSuperAdmin = profile?.role === 'super_admin';
+  const isAdmin = profile?.role === 'admin' || isSuperAdmin;
   useEffect(() => {
     if (profile && !isAdmin) {
       setCompletedFilter('pending');
     }
-  }, [profile]);
+  }, [profile, isAdmin]);
 
   const fetchData = async () => {
     setLoading(true);
@@ -105,6 +113,22 @@ export default function GatePassRecords() {
       const { error } = await supabase.from('gate_pass_records').delete().eq('id', recordToDelete.id);
       if (error) throw error;
       
+      await logAuditActivity({
+        action: 'GATE_PASS_DELETED',
+        entity_type: 'gate_pass',
+        entity_id: recordToDelete.gate_pass_no,
+        details: {
+          status: recordToDelete.status,
+          customer: recordToDelete.customer_name,
+          vehicle_number: recordToDelete.vehicle_number,
+          total_cartons: recordToDelete.total_cartons,
+          total_mtrs: recordToDelete.total_mtrs,
+          invoice_count: recordToDelete.invoice_count,
+          invoices: Array.isArray(recordToDelete.rows) ? recordToDelete.rows.map((r: any) => r.invoice) : []
+        },
+        performed_by: profile?.username || 'Admin'
+      });
+
       toast.success(`Gate pass ${recordToDelete.gate_pass_no} deleted successfully.`);
       setData(prev => prev.filter(r => r.id !== recordToDelete.id));
     } catch (err: any) {
@@ -115,7 +139,6 @@ export default function GatePassRecords() {
     }
   };
 
-  
   const handleUpdateStatus = async (status: 'locked' | 'completed' | 'dispatched', recordOverride?: any) => {
     const targetRecord = recordOverride || actionRecord;
     if (!targetRecord) return;
@@ -131,6 +154,33 @@ export default function GatePassRecords() {
       const { error } = await supabase.from('gate_pass_records').update({ status }).eq('id', targetRecord.id);
       if (error) throw error;
       
+      if (status === 'dispatched') {
+        await logAuditActivity({
+          action: 'GATE_PASS_DISPATCHED',
+          entity_type: 'gate_pass',
+          entity_id: targetRecord.gate_pass_no,
+          details: {
+            vehicle_number: targetRecord.vehicle_number,
+            driver_name: targetRecord.driver_name,
+            total_cartons: targetRecord.total_cartons
+          },
+          performed_by: profile?.username || 'Staff'
+        });
+      } else if (status === 'completed') {
+        await logAuditActivity({
+          action: 'GATE_PASS_POSTED',
+          entity_type: 'gate_pass',
+          entity_id: targetRecord.gate_pass_no,
+          details: {
+            customer: targetRecord.customer_name,
+            total_cartons: targetRecord.total_cartons,
+            total_mtrs: targetRecord.total_mtrs,
+            total_value: targetRecord.total_value
+          },
+          performed_by: profile?.username || 'Admin'
+        });
+      }
+
       const actionName = status === 'completed' ? 'posted' : status;
       toast.success(`Gate pass ${targetRecord.gate_pass_no} ${actionName} successfully.`);
       fetchData();
@@ -138,6 +188,78 @@ export default function GatePassRecords() {
       toast.error(`Error updating record: ${err.message}`);
     } finally {
       setCompleteConfirmOpen(false);
+      setActionRecord(null);
+    }
+  };
+
+  const handleUnpost = async () => {
+    if (!actionRecord || !isSuperAdmin) return;
+    setIsProcessingAction(true);
+    try {
+      const { error } = await supabase
+        .from('gate_pass_records')
+        .update({ status: 'dispatched' })
+        .eq('id', actionRecord.id);
+      if (error) throw error;
+
+      await logAuditActivity({
+        action: 'GATE_PASS_UNPOSTED',
+        entity_type: 'gate_pass',
+        entity_id: actionRecord.gate_pass_no,
+        details: {
+          previous_status: 'completed',
+          new_status: 'dispatched',
+          reason: reversalReason.trim() || 'No reason specified',
+          customer: actionRecord.customer_name,
+          total_cartons: actionRecord.total_cartons
+        },
+        performed_by: profile?.username || 'Super Admin'
+      });
+
+      toast.success(`Gate pass ${actionRecord.gate_pass_no} unposted. Associated invoices marked as Not Posted.`);
+      fetchData();
+    } catch (err: any) {
+      toast.error(`Error unposting gate pass: ${err.message}`);
+    } finally {
+      setIsProcessingAction(false);
+      setUnpostConfirmOpen(false);
+      setReversalReason("");
+      setActionRecord(null);
+    }
+  };
+
+  const handleUndispatch = async () => {
+    if (!actionRecord || !isSuperAdmin) return;
+    setIsProcessingAction(true);
+    try {
+      const { error } = await supabase
+        .from('gate_pass_records')
+        .update({ status: 'pending' })
+        .eq('id', actionRecord.id);
+      if (error) throw error;
+
+      await logAuditActivity({
+        action: 'GATE_PASS_UNDISPATCHED',
+        entity_type: 'gate_pass',
+        entity_id: actionRecord.gate_pass_no,
+        details: {
+          previous_status: 'dispatched',
+          new_status: 'pending',
+          reason: reversalReason.trim() || 'No reason specified',
+          customer: actionRecord.customer_name,
+          total_cartons: actionRecord.total_cartons
+        },
+        performed_by: profile?.username || 'Super Admin'
+      });
+
+      toast.success(`Gate pass ${actionRecord.gate_pass_no} reverted to Pending. It can now be edited or deleted.`);
+      fetchData();
+    } catch (err: any) {
+      toast.error(`Error reverting dispatch: ${err.message}`);
+    } finally {
+      setIsProcessingAction(false);
+      setUndispatchConfirmOpen(false);
+      setReversalReason("");
       setActionRecord(null);
     }
   };
@@ -464,11 +586,50 @@ export default function GatePassRecords() {
                           >
                             <CheckCircle className="h-4 w-4" />
                           </Button>
+                          {/* Super Admin Reversal: Unpost */}
+                          {isSuperAdmin && row.status === 'completed' && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              title="Unpost Gate Pass (Super Admin)"
+                              className="text-amber-500 hover:text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950/20"
+                              onClick={() => {
+                                setActionRecord(row);
+                                setReversalReason("");
+                                setUnpostConfirmOpen(true);
+                              }}
+                            >
+                              <RotateCcw className="h-4 w-4" />
+                            </Button>
+                          )}
+                          {/* Super Admin Reversal: Revert to Pending */}
+                          {isSuperAdmin && row.status === 'dispatched' && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              title="Revert to Pending (Super Admin)"
+                              className="text-orange-500 hover:text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-950/20"
+                              onClick={() => {
+                                setActionRecord(row);
+                                setReversalReason("");
+                                setUndispatchConfirmOpen(true);
+                              }}
+                            >
+                              <Undo2 className="h-4 w-4" />
+                            </Button>
+                          )}
                           <Button 
                             variant="ghost" 
                             size="icon" 
                             className="text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/20"
-                            disabled={row.status === 'locked' || row.status === 'completed' || row.status === 'dispatched'}
+                            disabled={!isSuperAdmin && (row.status === 'locked' || row.status === 'completed' || row.status === 'dispatched')}
+                            title={
+                              isSuperAdmin
+                                ? "Delete Gate Pass (Super Admin)"
+                                : (row.status === 'completed' || row.status === 'dispatched' || row.status === 'locked')
+                                  ? "Cannot delete processed gate pass"
+                                  : "Delete Gate Pass"
+                            }
                             onClick={() => {
                               setRecordToDelete(row);
                               setDeleteConfirmOpen(true);
@@ -737,6 +898,80 @@ export default function GatePassRecords() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteConfirmOpen(false)}>Cancel</Button>
             <Button variant="destructive" onClick={handleDelete}>Delete</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Super Admin Unpost Modal */}
+      <Dialog open={unpostConfirmOpen} onOpenChange={setUnpostConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center text-amber-600">
+              <RotateCcw className="h-5 w-5 mr-2" /> Reverse / Unpost Gate Pass
+            </DialogTitle>
+            <DialogDescription>
+              You are about to unpost Gate Pass <strong className="font-semibold text-slate-900 dark:text-slate-100">{actionRecord?.gate_pass_no}</strong>. 
+              This will revert the status back to <span className="font-medium text-blue-600">Dispatched</span>, and all associated invoices in Invoice Records will revert back to <span className="font-medium text-amber-600">Not Posted</span>.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-2">
+            <label className="text-xs font-medium text-muted-foreground block mb-1">
+              Reason for Reversal / Unpost (Required for audit log):
+            </label>
+            <Input 
+              placeholder="e.g. Invoiced amount correction required, customer requested revision..."
+              value={reversalReason}
+              onChange={(e) => setReversalReason(e.target.value)}
+              className="text-sm"
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" disabled={isProcessingAction} onClick={() => setUnpostConfirmOpen(false)}>Cancel</Button>
+            <Button 
+              className="bg-amber-600 hover:bg-amber-700 text-white font-medium" 
+              disabled={isProcessingAction}
+              onClick={handleUnpost}
+            >
+              {isProcessingAction ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              Confirm Unpost
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Super Admin Undispatch Modal */}
+      <Dialog open={undispatchConfirmOpen} onOpenChange={setUndispatchConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center text-orange-600">
+              <Undo2 className="h-5 w-5 mr-2" /> Revert Dispatch to Pending
+            </DialogTitle>
+            <DialogDescription>
+              You are about to revert Gate Pass <strong className="font-semibold text-slate-900 dark:text-slate-100">{actionRecord?.gate_pass_no}</strong> back to <span className="font-medium text-yellow-600">Pending</span>. 
+              This will allow editing carton counts, customer details, or deleting the gate pass.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-2">
+            <label className="text-xs font-medium text-muted-foreground block mb-1">
+              Reason for Reversion (Required for audit log):
+            </label>
+            <Input 
+              placeholder="e.g. Wrong vehicle assigned, goods not loaded yet..."
+              value={reversalReason}
+              onChange={(e) => setReversalReason(e.target.value)}
+              className="text-sm"
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" disabled={isProcessingAction} onClick={() => setUndispatchConfirmOpen(false)}>Cancel</Button>
+            <Button 
+              className="bg-orange-600 hover:bg-orange-700 text-white font-medium" 
+              disabled={isProcessingAction}
+              onClick={handleUndispatch}
+            >
+              {isProcessingAction ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              Confirm Revert to Pending
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

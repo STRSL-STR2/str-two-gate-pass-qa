@@ -53,7 +53,7 @@ export function AppLayout() {
     navItems = [
       { name: "Gate Pass Records", path: "/gate-pass/records", icon: History },
     ];
-  } else if (profile?.role === 'admin') {
+  } else if (profile?.role === 'admin' || profile?.role === 'super_admin') {
     navItems.push({ name: "Settings", path: "/settings", icon: SettingsIcon });
   }
 
@@ -216,7 +216,7 @@ export function AppLayout() {
               </div>
               <div className="flex flex-col min-w-0 flex-1">
                 <span className="text-xs font-semibold text-slate-100 truncate">{profile?.username || 'User'}</span>
-                <span className="text-[10px] text-slate-400 capitalize font-medium">{profile?.role || 'Staff'}</span>
+                <span className="text-[10px] text-slate-400 capitalize font-medium">{profile?.role?.replace('_', ' ') || 'Staff'}</span>
               </div>
             </div>
             <Button 
@@ -241,7 +241,7 @@ export function AppLayout() {
               </TooltipTrigger>
               <TooltipContent side="right" sideOffset={12} className="bg-slate-900 border border-slate-700/80 text-white text-xs">
                 <p className="font-semibold text-slate-100">{profile?.username || 'User'}</p>
-                <p className="text-[10px] text-slate-400 capitalize">{profile?.role || 'Staff'}</p>
+                <p className="text-[10px] text-slate-400 capitalize">{profile?.role?.replace('_', ' ') || 'Staff'}</p>
               </TooltipContent>
             </Tooltip>
 
@@ -297,7 +297,7 @@ export function AppLayout() {
                     </div>
                     <div className="flex flex-col min-w-0 flex-1">
                       <span className="text-xs font-semibold text-slate-100 truncate">{profile?.username || 'User'}</span>
-                      <span className="text-[10px] text-slate-400 capitalize font-medium">{profile?.role || 'Staff'}</span>
+                      <span className="text-[10px] text-slate-400 capitalize font-medium">{profile?.role?.replace('_', ' ') || 'Staff'}</span>
                     </div>
                   </div>
                   <Button 

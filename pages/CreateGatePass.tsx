@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { MasterDataRow, CompanySettings, Driver, Location, TimeSlot } from "@/types";
 import { supabase } from "@/lib/supabase";
+import { logAuditActivity } from "@/lib/audit";
 import { useAuth } from "@/hooks/use-auth";
 import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
@@ -305,6 +306,25 @@ export default function CreateGatePass() {
           }
           throw error;
         }
+
+        await logAuditActivity({
+          action: 'GATE_PASS_CREATED',
+          entity_type: 'gate_pass',
+          entity_id: currentGpNo,
+          details: {
+            customer: selectedRows[0]?.name || "",
+            vehicle_number: vehicleNo,
+            driver_name: selectedDriver?.driver_name || "",
+            location: locationName,
+            time_slot: timeSlot,
+            total_cartons: totalCartons,
+            total_mtrs: totalMtrs,
+            total_value: totalValue,
+            invoice_count: selectedRows.length,
+            invoices: selectedRows.map(r => r.invoice)
+          },
+          performed_by: profile?.username || "Unknown"
+        });
 
         toast.success(`Gate pass ${currentGpNo} created successfully!`);
         navigate(`/gate-pass/records`);

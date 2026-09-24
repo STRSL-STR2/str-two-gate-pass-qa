@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { Navigate, useNavigate } from "react-router-dom";
 import { supabase, hasSupabaseConfig } from "@/lib/supabase";
+import { logAuditActivity } from "@/lib/audit";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -57,6 +58,16 @@ export default function Login() {
       }
 
       signIn(userData);
+
+      // Log successful login
+      await logAuditActivity({
+        action: 'USER_LOGIN',
+        entity_type: 'user',
+        entity_id: userData.username,
+        details: { role: userData.role },
+        performed_by: userData.username
+      });
+
       if (userData.role === 'viewer') {
         navigate("/gate-pass/records");
       } else {

@@ -1,4 +1,4 @@
-export type Role = 'admin' | 'user' | 'viewer';
+export type Role = 'super_admin' | 'admin' | 'user' | 'viewer';
 
 export interface Profile {
   id: string;
@@ -91,5 +91,15 @@ export interface CompanySettings {
   contact_line: string;
   logo_url: string;
   signature_url?: string;
+}
+
+export interface AuditLog {
+  id: string;
+  action: string;
+  entity_type: string;
+  entity_id?: string | null;
+  details: Record<string, any>;
+  performed_by: string;
+  created_at: string;
 }
 

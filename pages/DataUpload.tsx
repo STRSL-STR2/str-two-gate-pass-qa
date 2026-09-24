@@ -5,6 +5,9 @@ import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
 import * as XLSX from "xlsx";
 import Papa from "papaparse";
+import { format } from "date-fns";
+import { useAuth } from "@/context/AuthContext";
+import { logAuditActivity } from "@/lib/audit";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { UploadCloud, CheckCircle2, AlertCircle, FileSpreadsheet, Loader2, Trash2, ArrowRight } from "lucide-react";
@@ -232,6 +235,7 @@ function SelectiveClearDialog({
 
 export default function DataUpload() {
   const navigate = useNavigate();
+  const { profile } = useAuth();
   const [invoices, setInvoices] = useState<FileState>({ file: null, status: "idle", data: [] });
   const [soDetails, setSoDetails] = useState<FileState>({ file: null, status: "idle", data: [] });
   const [rmaDetails, setRmaDetails] = useState<FileState>({ file: null, status: "idle", data: [] });
@@ -459,6 +463,21 @@ export default function DataUpload() {
       });
 
       await localforage.setItem("masterData", masterRows);
+
+      await logAuditActivity({
+        action: 'DATA_UPLOADED',
+        entity_type: 'master_data',
+        entity_id: `UPLOAD-${format(new Date(), 'yyyyMMdd-HHmmss')}`,
+        details: {
+          total_master_records: masterRows.length,
+          invoices_count: validInvoices.length,
+          so_count: rawSO.length,
+          rma_count: rawRMA.length,
+          locations_count: rawLoc.length
+        },
+        performed_by: profile?.username || "Admin"
+      });
+
       toast.success("Master Data generated successfully.");
       navigate("/master-data");
       
