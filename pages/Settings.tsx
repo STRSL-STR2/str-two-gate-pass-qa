@@ -219,61 +219,221 @@ export default function Settings() {
   
   const handleBackupData = async () => {
     try {
-      toast.info("Generating backup file...");
+      toast.info("Generating system backup file...");
       
       const wb = XLSX.utils.book_new();
 
-      // 1. Fetch gate pass records
-      const { data: gpRecords } = await supabase.from('gate_pass_records').select('*');
+      // 1. Fetch Gate Pass Records
+      const { data: gpRecords } = await supabase
+        .from('gate_pass_records')
+        .select('*')
+        .order('created_at', { ascending: false });
+
       if (gpRecords && gpRecords.length > 0) {
-        // Flatten rows array for Excel
-        const flatGpData = gpRecords.flatMap(gp => 
-          (gp.rows as any[]).map(row => ({
-            GatePassNo: gp.gate_pass_no,
-            Status: gp.status,
-            Date: gp.date,
-            TimeSlot: gp.time_slot,
-            Location: gp.location,
-            VehicleNo: gp.vehicle_number,
-            Driver: gp.driver_name,
-            Invoice: row.invoice,
-            Buyer: row.buyer,
-            Qty: row.mtrs,
-            Value: row.value,
-            Cartons: row.cartons
-          }))
-        );
+        // Sheet 1: Detailed Gate Pass Item Rows
+        const flatGpData = gpRecords.flatMap(gp => {
+          const rows = Array.isArray(gp.rows) ? gp.rows : [];
+          if (rows.length === 0) {
+            return [{
+              "Gate Pass No": gp.gate_pass_no || "-",
+              "Status": (gp.status || "COMPLETED").toUpperCase(),
+              "Date": gp.date || "-",
+              "Time Slot": gp.time_slot || gp.time || "-",
+              "Delivery Location": gp.location || "-",
+              "Vehicle Number": gp.vehicle_number || "-",
+              "Driver Name": gp.driver_name || "-",
+              "Driver NIC": gp.nic || "-",
+              "Driver Phone": gp.phone_number || "-",
+              "Customer": gp.customer_name || "-",
+              "Invoice No": "-",
+              "Buyer": "-",
+              "PO / Order": "-",
+              "DO / BOL": "-",
+              "Qty (Mtrs)": Number(gp.total_mtrs) || 0,
+              "Cartons": Number(gp.total_cartons) || 0,
+              "Value": Number(gp.total_value) || 0,
+              "Remark": "-",
+              "Created By": gp.created_by || "-",
+              "Created At": gp.created_at ? new Date(gp.created_at).toLocaleString() : "-"
+            }];
+          }
+          return rows.map((row: any) => ({
+            "Gate Pass No": gp.gate_pass_no || "-",
+            "Status": (gp.status || "COMPLETED").toUpperCase(),
+            "Date": gp.date || "-",
+            "Time Slot": gp.time_slot || gp.time || "-",
+            "Delivery Location": gp.location || "-",
+            "Vehicle Number": gp.vehicle_number || "-",
+            "Driver Name": gp.driver_name || "-",
+            "Driver NIC": gp.nic || "-",
+            "Driver Phone": gp.phone_number || "-",
+            "Customer": gp.customer_name || "-",
+            "Invoice No": row.invoice || "-",
+            "Buyer": row.buyer || "-",
+            "PO / Order": row.po || "-",
+            "DO / BOL": row.do || "-",
+            "Qty (Mtrs)": Number(row.mtrs) || 0,
+            "Cartons": Number(row.cartons) || 0,
+            "Value": Number(row.value) || 0,
+            "Remark": row.remark || "",
+            "Created By": gp.created_by || "-",
+            "Created At": gp.created_at ? new Date(gp.created_at).toLocaleString() : "-"
+          }));
+        });
         const wsGp = XLSX.utils.json_to_sheet(flatGpData);
-        XLSX.utils.book_append_sheet(wb, wsGp, "Gate Passes");
+        XLSX.utils.book_append_sheet(wb, wsGp, "Gate Pass Items");
+
+        // Sheet 2: Gate Pass Summary
+        const summaryGpData = gpRecords.map(gp => ({
+          "Gate Pass No": gp.gate_pass_no || "-",
+          "Status": (gp.status || "COMPLETED").toUpperCase(),
+          "Date": gp.date || "-",
+          "Time Slot": gp.time_slot || gp.time || "-",
+          "Delivery Location": gp.location || "-",
+          "Vehicle Number": gp.vehicle_number || "-",
+          "Driver Name": gp.driver_name || "-",
+          "Driver NIC": gp.nic || "-",
+          "Driver Phone": gp.phone_number || "-",
+          "Customer / Buyer": gp.customer_name || "-",
+          "Total Invoices": gp.invoice_count || (Array.isArray(gp.rows) ? gp.rows.length : 0),
+          "Total Qty (Mtrs)": Number(gp.total_mtrs) || 0,
+          "Total Cartons": Number(gp.total_cartons) || 0,
+          "Total Value": Number(gp.total_value) || 0,
+          "Created By": gp.created_by || "-",
+          "Created At": gp.created_at ? new Date(gp.created_at).toLocaleString() : "-"
+        }));
+        const wsGpSummary = XLSX.utils.json_to_sheet(summaryGpData);
+        XLSX.utils.book_append_sheet(wb, wsGpSummary, "Gate Pass Summary");
       } else {
-        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([{ Message: "No Gate Passes Found" }]), "Gate Passes");
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([{ "Message": "No Gate Passes Found" }]), "Gate Passes");
       }
 
-      // 2. Fetch Master Data
+      // 2. Fetch Drivers Table
+      const { data: dbDrivers } = await supabase.from('drivers').select('*').order('driver_name');
+      const driverList = dbDrivers && dbDrivers.length > 0 ? dbDrivers : drivers;
+      if (driverList.length > 0) {
+        const driversData = driverList.map(d => ({
+          "Driver Name": d.driver_name,
+          "Vehicle Number": d.vehicle_number,
+          "Phone Number": d.phone_number || "-",
+          "NIC Number": d.nic || "-",
+          "Created Date": (d as any).created_at ? new Date((d as any).created_at).toLocaleString() : "-"
+        }));
+        const wsDrivers = XLSX.utils.json_to_sheet(driversData);
+        XLSX.utils.book_append_sheet(wb, wsDrivers, "Drivers");
+      } else {
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([{ "Message": "No Drivers Found" }]), "Drivers");
+      }
+
+      // 3. Fetch Delivery Locations Table
+      const { data: dbLocations } = await supabase.from('delivery_locations').select('*').order('location_name');
+      const locationList = dbLocations && dbLocations.length > 0 ? dbLocations : locations;
+      if (locationList.length > 0) {
+        const locationsData = locationList.map(l => ({
+          "Location Name": l.location_name,
+          "Status": l.is_active !== false ? "Active" : "Inactive",
+          "Created Date": (l as any).created_at ? new Date((l as any).created_at).toLocaleString() : "-"
+        }));
+        const wsLocations = XLSX.utils.json_to_sheet(locationsData);
+        XLSX.utils.book_append_sheet(wb, wsLocations, "Locations");
+      } else {
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([{ "Message": "No Locations Found" }]), "Locations");
+      }
+
+      // 4. Fetch Time Slots Table
+      const { data: dbTimeSlots } = await supabase.from('time_slots').select('*').order('label');
+      const timeSlotList = dbTimeSlots && dbTimeSlots.length > 0 ? dbTimeSlots : timeSlots;
+      if (timeSlotList.length > 0) {
+        const timeSlotsData = timeSlotList.map(t => ({
+          "Time Slot Window": t.label,
+          "Status": t.is_active !== false ? "Active" : "Inactive",
+          "Created Date": (t as any).created_at ? new Date((t as any).created_at).toLocaleString() : "-"
+        }));
+        const wsTimeSlots = XLSX.utils.json_to_sheet(timeSlotsData);
+        XLSX.utils.book_append_sheet(wb, wsTimeSlots, "Time Slots");
+      } else {
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([{ "Message": "No Time Slots Found" }]), "Time Slots");
+      }
+
+      // 5. Fetch Organization Info Table
+      const orgData = [{
+        "Organization Name": companySettings?.company_name || "-",
+        "Business Address": companySettings?.business_address || "-",
+        "Registered Address": companySettings?.registered_address || "-",
+        "Contact Details": companySettings?.contact_line || "-",
+        "Logo Configured": companySettings?.logo_url ? "Yes" : "No",
+        "Signature Configured": signature ? "Yes" : "No"
+      }];
+      const wsOrg = XLSX.utils.json_to_sheet(orgData);
+      XLSX.utils.book_append_sheet(wb, wsOrg, "Organization Info");
+
+      // 6. Fetch System Users Table (Safe export without passwords)
+      const { data: dbUsers } = await supabase.from('app_users').select('username, email, role, is_active, created_at').order('username');
+      const userList = dbUsers && dbUsers.length > 0 ? dbUsers : profiles;
+      if (userList.length > 0) {
+        const usersData = userList.map(u => ({
+          "Username": u.username,
+          "Email": u.email || "-",
+          "Role": (u.role || "user").toUpperCase(),
+          "Status": u.is_active ? "Active" : "Disabled",
+          "Account Created": u.created_at ? new Date(u.created_at).toLocaleDateString() : "-"
+        }));
+        const wsUsers = XLSX.utils.json_to_sheet(usersData);
+        XLSX.utils.book_append_sheet(wb, wsUsers, "System Users");
+      }
+
+      // 7. Fetch Master Data (Invoices from localforage)
       const masterData = await localforage.getItem("masterData");
       if (masterData && Array.isArray(masterData) && masterData.length > 0) {
-        const wsMaster = XLSX.utils.json_to_sheet(masterData);
-        XLSX.utils.book_append_sheet(wb, wsMaster, "Master Data");
-      } else {
-        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([{ Message: "No Master Data Found" }]), "Master Data");
+        const formattedMaster = masterData.map((row: any) => ({
+          "Invoice No": row.invoice || "-",
+          "Buyer / Customer": row.name || "-",
+          "Invoice Date": row.invoice_date || "-",
+          "Order No": row.order_no || "-",
+          "Line": row.line || "-",
+          "Release": row.release || "-",
+          "Qty Invoiced": Number(row.qty_invoiced) || 0,
+          "Extended Price": Number(row.extended_price) || 0,
+          "DO / BOL": row.do_bol || "-",
+          "Ship Via": row.ship_via_description || "-",
+          "Consignee Address": row.consignee_address_3 || "-",
+          "Customer PO": row.cust_po || "-",
+          "Cartons": Number(row.cartons) || 0,
+          "Gate Pass Issued": row.gate_pass_issued || "No"
+        }));
+        const wsMaster = XLSX.utils.json_to_sheet(formattedMaster);
+        XLSX.utils.book_append_sheet(wb, wsMaster, "Master Invoices");
       }
-      
-      // 3. Settings Data
-      const settingsData = [
-        { Type: 'Driver', Details: drivers.map(d => `${d.driver_name} - ${d.vehicle_number}`).join(' | ') },
-        { Type: 'Location', Details: locations.map(l => l.location_name).join(' | ') },
-        { Type: 'Time Slot', Details: timeSlots.map(t => t.time_slot).join(' | ') }
-      ];
-      const wsSettings = XLSX.utils.json_to_sheet(settingsData);
-      XLSX.utils.book_append_sheet(wb, wsSettings, "System Settings");
 
-      // Download
-      XLSX.writeFile(wb, `System_Backup_${new Date().toISOString().split('T')[0]}.xlsx`);
-      toast.success("Backup downloaded successfully.");
+      // Auto-fit column widths for every worksheet
+      for (const sheetName of wb.SheetNames) {
+        const ws = wb.Sheets[sheetName];
+        if (ws && ws["!ref"]) {
+          const range = XLSX.utils.decode_range(ws["!ref"]);
+          const colWidths: { wch: number }[] = [];
+          for (let C = range.s.c; C <= range.e.c; ++C) {
+            let maxLen = 12;
+            for (let R = range.s.r; R <= range.e.r; ++R) {
+              const cell = ws[XLSX.utils.encode_cell({ c: C, r: R })];
+              if (cell && cell.v !== undefined && cell.v !== null) {
+                const len = String(cell.v).length;
+                if (len > maxLen) maxLen = Math.min(len + 2, 50);
+              }
+            }
+            colWidths.push({ wch: maxLen });
+          }
+          ws["!cols"] = colWidths;
+        }
+      }
+
+      // Download file with standard timestamped filename
+      const dateStr = new Date().toISOString().split('T')[0];
+      XLSX.writeFile(wb, `STR2_System_Backup_${dateStr}.xlsx`);
+      toast.success("Complete system backup downloaded with separate sheets.");
 
     } catch (err: any) {
       console.error(err);
-      toast.error("Failed to generate backup.");
+      toast.error("Failed to generate backup: " + (err.message || "Unknown error"));
     }
   };
 
@@ -478,47 +638,53 @@ export default function Settings() {
         {/* Company Settings */}
         {activeTab === "company" && (<div className="h-full overflow-y-auto pb-8 pr-2">
           <Card className="border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
-            <div className="p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/20">
-              <CardTitle className="text-lg">Organization Information</CardTitle>
-              <CardDescription className="mt-1">Details configured here will appear on printed gate passes.</CardDescription>
+            <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/20">
+              <CardTitle className="text-base font-semibold">Organization Information</CardTitle>
+              <CardDescription className="text-xs mt-0.5">Details configured here will appear on printed gate passes.</CardDescription>
             </div>
-            <CardContent className="p-6 space-y-8">
-              <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 w-full">
+            <CardContent className="p-6 space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full max-w-5xl">
                 <div className="space-y-2">
-                  <Label className="text-slate-700 dark:text-slate-300">Organization Name</Label>
+                  <Label className="text-sm font-medium text-slate-700 dark:text-slate-300">Organization Name</Label>
                   <Input 
                     value={companySettings?.company_name || ""}
                     onChange={e => setCompanySettings(prev => prev ? {...prev, company_name: e.target.value} : null)}
-                    className="bg-white dark:bg-slate-900"
+                    className="bg-white dark:bg-slate-900 h-10 w-full"
+                    placeholder="e.g. Star Garments Group"
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label className="text-slate-700 dark:text-slate-300">Business Address</Label>
-                  <Input 
-                    value={companySettings?.business_address || ""}
-                    onChange={e => setCompanySettings(prev => prev ? {...prev, business_address: e.target.value} : null)}
-                    className="bg-white dark:bg-slate-900"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-slate-700 dark:text-slate-300">Registered Address</Label>
-                  <Input 
-                    value={companySettings?.registered_address || ""}
-                    onChange={e => setCompanySettings(prev => prev ? {...prev, registered_address: e.target.value} : null)}
-                    className="bg-white dark:bg-slate-900"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-slate-700 dark:text-slate-300">Contact Details (Tel/Fax/Email)</Label>
+                  <Label className="text-sm font-medium text-slate-700 dark:text-slate-300">Contact Details (Tel/Fax/Email)</Label>
                   <Input 
                     value={companySettings?.contact_line || ""}
                     onChange={e => setCompanySettings(prev => prev ? {...prev, contact_line: e.target.value} : null)}
-                    className="bg-white dark:bg-slate-900"
+                    className="bg-white dark:bg-slate-900 h-10 w-full"
+                    placeholder="Tel: +94 11 1234567 | Email: info@example.com"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-sm font-medium text-slate-700 dark:text-slate-300">Business Address</Label>
+                  <textarea 
+                    rows={3}
+                    value={companySettings?.business_address || ""}
+                    onChange={e => setCompanySettings(prev => prev ? {...prev, business_address: e.target.value} : null)}
+                    className="flex w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm ring-offset-white placeholder:text-slate-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-950 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-800 dark:bg-slate-900 dark:ring-offset-slate-950 dark:placeholder:text-slate-400 dark:focus-visible:ring-slate-300 resize-y"
+                    placeholder="Operational / Facility Address"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-sm font-medium text-slate-700 dark:text-slate-300">Registered Address</Label>
+                  <textarea 
+                    rows={3}
+                    value={companySettings?.registered_address || ""}
+                    onChange={e => setCompanySettings(prev => prev ? {...prev, registered_address: e.target.value} : null)}
+                    className="flex w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm ring-offset-white placeholder:text-slate-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-950 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-800 dark:bg-slate-900 dark:ring-offset-slate-950 dark:placeholder:text-slate-400 dark:focus-visible:ring-slate-300 resize-y"
+                    placeholder="Official Registered Address"
                   />
                 </div>
               </div>
 
-              <div className="grid md:grid-cols-2 gap-6 pt-6 border-t border-slate-100 dark:border-slate-800">
+              <div className="grid md:grid-cols-2 gap-6 pt-6 border-t border-slate-100 dark:border-slate-800 max-w-5xl">
                 <FileUploader
                   label="Company Logo"
                   value={companySettings?.logo_url || null}
@@ -546,37 +712,41 @@ export default function Settings() {
         {/* Drivers */}
         {activeTab === "drivers" && (<div className="flex flex-col h-full">
           <Card className="border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden flex flex-col h-full">
-
-            <div className="p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/20 shrink-0">
-
-              <CardTitle className="text-lg">Drivers Registry</CardTitle>
-              <CardDescription className="mt-1">Manage approved drivers and their primary vehicles.</CardDescription>
+            <div className="px-4 py-2 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/20 shrink-0 flex items-center justify-between">
+              <div>
+                <CardTitle className="text-sm font-semibold">Drivers Registry</CardTitle>
+                <CardDescription className="text-xs text-slate-500">Manage approved drivers and their primary vehicles.</CardDescription>
+              </div>
+              <div className="text-xs font-medium text-slate-500 bg-slate-100 dark:bg-slate-800 px-2.5 py-0.5 rounded-full">
+                {drivers.length} Drivers
+              </div>
             </div>
             <CardContent className="p-0 flex flex-col flex-1 overflow-hidden">
-              <div className="p-6 shrink-0 border-b border-slate-100 dark:border-slate-800"><div className="flex flex-col md:flex-row gap-3 items-end m-0 bg-slate-50 dark:bg-slate-900/50 p-4 rounded-xl border border-slate-100 dark:border-slate-800">
-                <div className="grid gap-1.5 flex-1 w-full">
-                  <Label className="text-xs text-slate-500">Driver Name</Label>
-                  <Input className="h-9 bg-white dark:bg-slate-950" value={newDriver.driver_name} onChange={e => setNewDriver({...newDriver, driver_name: e.target.value})} placeholder="John Doe" />
+              <div className="px-4 py-2 shrink-0 border-b border-slate-100 dark:border-slate-800 bg-slate-50/30 dark:bg-slate-900/30">
+                <div className="flex flex-col md:flex-row gap-2 items-end">
+                  <div className="grid gap-1 flex-1 w-full">
+                    <Label className="text-[11px] font-medium text-slate-500">Driver Name *</Label>
+                    <Input className="h-8 text-xs bg-white dark:bg-slate-950" value={newDriver.driver_name} onChange={e => setNewDriver({...newDriver, driver_name: e.target.value})} placeholder="Driver name" />
+                  </div>
+                  <div className="grid gap-1 flex-1 w-full">
+                    <Label className="text-[11px] font-medium text-slate-500">Vehicle No *</Label>
+                    <Input className="h-8 text-xs bg-white dark:bg-slate-950 uppercase" value={newDriver.vehicle_number} onChange={e => setNewDriver({...newDriver, vehicle_number: e.target.value})} placeholder="ABC-1234" />
+                  </div>
+                  <div className="grid gap-1 flex-1 w-full">
+                    <Label className="text-[11px] font-medium text-slate-500">Phone No</Label>
+                    <Input className="h-8 text-xs bg-white dark:bg-slate-950" value={newDriver.phone_number} onChange={e => setNewDriver({...newDriver, phone_number: e.target.value})} placeholder="071..." />
+                  </div>
+                  <div className="grid gap-1 flex-1 w-full">
+                    <Label className="text-[11px] font-medium text-slate-500">NIC</Label>
+                    <Input className="h-8 text-xs bg-white dark:bg-slate-950" value={newDriver.nic} onChange={e => setNewDriver({...newDriver, nic: e.target.value})} placeholder="NIC number" />
+                  </div>
+                  <Button onClick={handleAddDriver} size="sm" className="bg-slate-900 text-white hover:bg-slate-800 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200 h-8 text-xs px-3 w-full md:w-auto shrink-0">
+                    <Plus className="mr-1 h-3.5 w-3.5" /> Add Driver
+                  </Button>
                 </div>
-                <div className="grid gap-1.5 flex-1 w-full">
-                  <Label className="text-xs text-slate-500">Vehicle No</Label>
-                  <Input className="h-9 bg-white dark:bg-slate-950 uppercase" value={newDriver.vehicle_number} onChange={e => setNewDriver({...newDriver, vehicle_number: e.target.value})} placeholder="ABC-1234" />
-                </div>
-                <div className="grid gap-1.5 flex-1 w-full">
-                  <Label className="text-xs text-slate-500">Phone No</Label>
-                  <Input className="h-9 bg-white dark:bg-slate-950" value={newDriver.phone_number} onChange={e => setNewDriver({...newDriver, phone_number: e.target.value})} placeholder="071..." />
-                </div>
-                <div className="grid gap-1.5 flex-1 w-full">
-                  <Label className="text-xs text-slate-500">NIC</Label>
-                  <Input className="h-9 bg-white dark:bg-slate-950" value={newDriver.nic} onChange={e => setNewDriver({...newDriver, nic: e.target.value})} placeholder="NIC number" />
-                </div>
-                <Button onClick={handleAddDriver} className="bg-slate-900 text-white hover:bg-slate-800 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200 h-9 w-full md:w-auto mt-2 md:mt-0">
-                  <Plus className="mr-2 h-4 w-4" /> Add Driver
-                </Button>
-              </div>
               </div>
               <div className="flex-1 w-full overflow-y-auto">
-              <Table>
+                <Table>
                   <TableHeader className="bg-slate-50 dark:bg-slate-900 sticky top-0 z-10">
                     <TableRow className="hover:bg-transparent">
                       <TableHead className="font-medium text-slate-600 dark:text-slate-400">Driver Name</TableHead>
@@ -616,14 +786,14 @@ export default function Settings() {
         {/* Locations */}
         {activeTab === "locations" && (<div className="flex flex-col h-full">
           <Card className="border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden flex flex-col h-full">
-            <div className="p-4 md:p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/20 shrink-0 flex flex-col md:flex-row gap-4 justify-between items-center w-full">
-              <CardTitle className="text-lg whitespace-nowrap">Delivery Locations</CardTitle>
-              <div className="flex items-center gap-3 w-full md:max-w-md">
+            <div className="px-4 py-2.5 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/20 shrink-0 flex flex-col md:flex-row gap-4 justify-between items-center w-full">
+              <CardTitle className="text-sm font-semibold whitespace-nowrap">Delivery Locations</CardTitle>
+              <div className="flex items-center gap-2 w-full md:max-w-md">
                 <div className="flex-1 w-full relative">
-                  <Input className="h-10 bg-white dark:bg-slate-950 w-full" value={newLocation} onChange={e => setNewLocation(e.target.value)} placeholder="e.g. MAS Holdings HQ" />
+                  <Input className="h-8 text-xs bg-white dark:bg-slate-950 w-full" value={newLocation} onChange={e => setNewLocation(e.target.value)} placeholder="e.g. MAS Holdings HQ" />
                 </div>
-                <Button onClick={handleAddLocation} className="bg-slate-900 text-white hover:bg-slate-800 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200 h-10 shrink-0">
-                  <Plus className="mr-2 h-4 w-4" /> Add
+                <Button onClick={handleAddLocation} size="sm" className="bg-slate-900 text-white hover:bg-slate-800 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200 h-8 text-xs px-3 shrink-0">
+                  <Plus className="mr-1 h-3.5 w-3.5" /> Add
                 </Button>
               </div>
             </div>
@@ -663,14 +833,14 @@ export default function Settings() {
         {/* Time Slots */}
         {activeTab === "times" && (<div className="flex flex-col h-full">
           <Card className="border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden flex flex-col h-full">
-            <div className="p-4 md:p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/20 shrink-0 flex flex-col md:flex-row gap-4 justify-between items-center w-full">
-              <CardTitle className="text-lg whitespace-nowrap">Delivery Time Slots</CardTitle>
-              <div className="flex items-center gap-3 w-full md:max-w-md">
+            <div className="px-4 py-2.5 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/20 shrink-0 flex flex-col md:flex-row gap-4 justify-between items-center w-full">
+              <CardTitle className="text-sm font-semibold whitespace-nowrap">Delivery Time Slots</CardTitle>
+              <div className="flex items-center gap-2 w-full md:max-w-md">
                 <div className="flex-1 w-full relative">
-                  <Input className="h-10 bg-white dark:bg-slate-950 w-full" value={newTimeSlot} onChange={e => setNewTimeSlot(e.target.value)} placeholder="e.g. 08:00 AM - 10:00 AM" />
+                  <Input className="h-8 text-xs bg-white dark:bg-slate-950 w-full" value={newTimeSlot} onChange={e => setNewTimeSlot(e.target.value)} placeholder="e.g. 08:00 AM - 10:00 AM" />
                 </div>
-                <Button onClick={handleAddTimeSlot} className="bg-slate-900 text-white hover:bg-slate-800 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200 h-10 shrink-0">
-                  <Plus className="mr-2 h-4 w-4" /> Add
+                <Button onClick={handleAddTimeSlot} size="sm" className="bg-slate-900 text-white hover:bg-slate-800 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200 h-8 text-xs px-3 shrink-0">
+                  <Plus className="mr-1 h-3.5 w-3.5" /> Add
                 </Button>
               </div>
             </div>
@@ -710,61 +880,65 @@ export default function Settings() {
         {/* Users */}
         {activeTab === "users" && (<div className="flex flex-col h-full">
           <Card className="border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden flex flex-col h-full">
-
-            <div className="p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/20 shrink-0">
-
-              <CardTitle className="text-lg">System Users</CardTitle>
-              <CardDescription className="mt-1">Create accounts and manage access rules.</CardDescription>
+            <div className="px-4 py-2 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/20 shrink-0 flex items-center justify-between">
+              <div>
+                <CardTitle className="text-sm font-semibold">System Users</CardTitle>
+                <CardDescription className="text-xs text-slate-500">Create accounts and manage access rules.</CardDescription>
+              </div>
+              <div className="text-xs font-medium text-slate-500 bg-slate-100 dark:bg-slate-800 px-2.5 py-0.5 rounded-full">
+                {profiles.length} Users
+              </div>
             </div>
             <CardContent className="p-0 flex flex-col flex-1 overflow-hidden">
-              <div className="p-6 shrink-0 border-b border-slate-100 dark:border-slate-800"><div className="flex flex-col md:flex-row gap-4 items-end m-0 bg-slate-50 dark:bg-slate-900/50 p-5 rounded-xl border border-slate-100 dark:border-slate-800">
-                <div className="grid gap-1.5 flex-1 w-full">
-                  <Label className="text-xs text-slate-500">Username *</Label>
-                  <Input 
-                    value={newUsername} 
-                    onChange={e => setNewUsername(e.target.value.replace(/\s/g, ''))} 
-                    placeholder="john_doe"
-                    className="h-10 bg-white dark:bg-slate-950"
-                  />
+              <div className="px-4 py-2 shrink-0 border-b border-slate-100 dark:border-slate-800 bg-slate-50/30 dark:bg-slate-900/30">
+                <div className="flex flex-col md:flex-row gap-2 items-end">
+                  <div className="grid gap-1 flex-1 w-full">
+                    <Label className="text-[11px] font-medium text-slate-500">Username *</Label>
+                    <Input 
+                      value={newUsername} 
+                      onChange={e => setNewUsername(e.target.value.replace(/\s/g, ''))} 
+                      placeholder="john_doe"
+                      className="h-8 text-xs bg-white dark:bg-slate-950"
+                    />
+                  </div>
+                  <div className="grid gap-1 flex-1 w-full">
+                    <Label className="text-[11px] font-medium text-slate-500">Email Address</Label>
+                    <Input 
+                      type="email"
+                      value={newUserEmail} 
+                      onChange={e => setNewUserEmail(e.target.value)} 
+                      placeholder="Optional (johndoe@example.com)"
+                      className="h-8 text-xs bg-white dark:bg-slate-950"
+                    />
+                  </div>
+                  <div className="grid gap-1 flex-1 w-full">
+                    <Label className="text-[11px] font-medium text-slate-500">Password *</Label>
+                    <Input 
+                      type="password"
+                      value={newUserPassword} 
+                      onChange={e => setNewUserPassword(e.target.value)}
+                      placeholder="Min 6 chars"
+                      className="h-8 text-xs bg-white dark:bg-slate-950"
+                    />
+                  </div>
+                  <div className="grid gap-1 w-full md:w-32">
+                    <Label className="text-[11px] font-medium text-slate-500">Role</Label>
+                    <select 
+                      className="flex h-8 w-full rounded-md border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950 px-2.5 py-0 text-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500"
+                      value={newUserRole}
+                      onChange={e => setNewUserRole(e.target.value)}
+                    >
+                      <option value="user">User</option>
+                      <option value="admin">Admin</option>
+                      <option value="viewer">Viewer</option>
+                    </select>
+                  </div>
+                  <Button onClick={handleAddUser} size="sm" className="bg-slate-900 text-white hover:bg-slate-800 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200 h-8 text-xs px-3 w-full md:w-auto shrink-0">
+                    <Plus className="mr-1 h-3.5 w-3.5" /> Add User
+                  </Button>
                 </div>
-                <div className="grid gap-1.5 flex-1 w-full">
-                  <Label className="text-xs text-slate-500">Email Address</Label>
-                  <Input 
-                    type="email"
-                    value={newUserEmail} 
-                    onChange={e => setNewUserEmail(e.target.value)} 
-                    placeholder="Optional (johndoe@example.com)"
-                    className="h-10 bg-white dark:bg-slate-950"
-                  />
-                </div>
-                <div className="grid gap-1.5 flex-1 w-full">
-                  <Label className="text-xs text-slate-500">Password *</Label>
-                  <Input 
-                    type="password"
-                    value={newUserPassword} 
-                    onChange={e => setNewUserPassword(e.target.value)}
-                    placeholder="Minimum 6 chars"
-                    className="h-10 bg-white dark:bg-slate-950"
-                  />
-                </div>
-                <div className="grid gap-1.5 w-full md:w-40">
-                  <Label className="text-xs text-slate-500">Role</Label>
-                  <select 
-                    className="flex h-10 w-full rounded-md border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950 px-3 py-1 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500"
-                    value={newUserRole}
-                    onChange={e => setNewUserRole(e.target.value)}
-                  >
-                    <option value="user">User</option>
-                    <option value="admin">Admin</option>
-                    <option value="viewer">Viewer</option>
-                  </select>
-                </div>
-                <Button onClick={handleAddUser} className="bg-slate-900 text-white hover:bg-slate-800 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200 h-10 w-full md:w-auto">
-                  <Plus className="mr-2 h-4 w-4" /> Add User
-                </Button>
-</div>
-</div>
-<div className="flex-1 overflow-y-auto">
+              </div>
+              <div className="flex-1 overflow-y-auto">
                 <Table>
                   <TableHeader className="bg-slate-50 dark:bg-slate-900 sticky top-0 z-10">
                     <TableRow className="hover:bg-transparent">
@@ -818,21 +992,23 @@ export default function Settings() {
         {/* System Backup */}
         {activeTab === "backup" && (<div className="h-full overflow-y-auto pb-8 pr-2">
           <Card className="border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
-            <div className="p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/20">
-              <CardTitle className="text-lg">System Backup</CardTitle>
-              <CardDescription className="mt-1">Download a complete backup of all system data.</CardDescription>
+            <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/20">
+              <CardTitle className="text-base font-semibold">System Backup</CardTitle>
+              <CardDescription className="text-xs mt-0.5">Download a complete structured backup of all system data.</CardDescription>
             </div>
             <CardContent className="p-6 space-y-6 flex flex-col items-center text-center justify-center py-12">
               <div className="h-16 w-16 bg-blue-50 dark:bg-blue-900/20 text-blue-500 rounded-full flex items-center justify-center mb-2">
                 <Download className="h-8 w-8" />
               </div>
               <div className="space-y-1">
-                <h3 className="font-medium text-lg">Export All Data to Excel</h3>
-                <p className="text-sm text-slate-500 max-w-sm">This will generate an Excel file containing separate sheets for Gate Passes, Master Data (Invoices), and Settings.</p>
+                <h3 className="font-semibold text-lg text-slate-800 dark:text-slate-200">Export All Data to Multi-Sheet Excel</h3>
+                <p className="text-sm text-slate-500 max-w-md">
+                  Generates an Excel workbook containing dedicated sheets and structured tables for Gate Pass Items, Gate Pass Summary, Drivers Registry, Delivery Locations, Time Slots, Organization Info, and System Users.
+                </p>
               </div>
-              <Button onClick={handleBackupData} size="lg" className="mt-4 shadow-sm">
+              <Button onClick={handleBackupData} size="lg" className="mt-4 shadow-sm bg-slate-900 text-white hover:bg-slate-800 dark:bg-white dark:text-slate-900">
                 <Download className="h-4 w-4 mr-2" />
-                Download Backup File
+                Download System Backup (.xlsx)
               </Button>
             </CardContent>
           </Card>
