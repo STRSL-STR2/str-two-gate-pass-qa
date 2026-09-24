@@ -120,16 +120,24 @@ export default function GatePassRecords() {
     const targetRecord = recordOverride || actionRecord;
     if (!targetRecord) return;
     
+    // Validation: Cannot post (complete) if gate pass is not dispatched yet!
+    if (status === 'completed' && targetRecord.status !== 'dispatched') {
+      toast.error(`Cannot post Gate Pass ${targetRecord.gate_pass_no}! Goods must be dispatched first before posting.`);
+      setCompleteConfirmOpen(false);
+      return;
+    }
+    
     try {
       const { error } = await supabase.from('gate_pass_records').update({ status }).eq('id', targetRecord.id);
       if (error) throw error;
       
-      toast.success(`Gate pass ${targetRecord.gate_pass_no} ${status} successfully.`);
+      const actionName = status === 'completed' ? 'posted' : status;
+      toast.success(`Gate pass ${targetRecord.gate_pass_no} ${actionName} successfully.`);
       fetchData();
     } catch (err: any) {
       toast.error(`Error updating record: ${err.message}`);
     } finally {
-            setCompleteConfirmOpen(false);
+      setCompleteConfirmOpen(false);
       setActionRecord(null);
     }
   };
@@ -403,17 +411,17 @@ export default function GatePassRecords() {
                       <Button variant="ghost" size="icon" onClick={() => setViewingRecord(row)} title="View / Reprint">
                         <Eye className="h-4 w-4" />
                       </Button>
-                      {!isAdmin && row.status !== 'completed' && row.status !== 'dispatched' && (
+                      {row.status !== 'completed' && row.status !== 'dispatched' && (
                         <Button 
                           variant="ghost" 
                           size="icon" 
-                          title="Dispatch"
+                          title="Dispatch Goods"
                           onClick={() => {
-                              setActionRecord(row);
-                              setDispatchConfirmOpen(true);
-                            }}
+                            setActionRecord(row);
+                            setDispatchConfirmOpen(true);
+                          }}
                         >
-                          <Truck className="h-4 w-4 text-blue-500" />
+                          <Truck className="h-4 w-4 text-blue-500 hover:text-blue-600" />
                         </Button>
                       )}
                       {isAdmin && (
@@ -430,14 +438,31 @@ export default function GatePassRecords() {
                           <Button 
                             variant="ghost" 
                             size="icon" 
-                            title="Complete"
+                            title={
+                              row.status === 'completed' 
+                                ? 'Already Posted' 
+                                : row.status !== 'dispatched' 
+                                  ? 'Cannot post: Must be dispatched first' 
+                                  : 'Post Gate Pass'
+                            }
                             disabled={row.status === 'completed'}
                             onClick={() => {
+                              if (row.status !== 'dispatched') {
+                                toast.error(`Cannot post Gate Pass ${row.gate_pass_no}! Goods must be dispatched first before posting.`);
+                                return;
+                              }
                               setActionRecord(row);
                               setCompleteConfirmOpen(true);
                             }}
+                            className={
+                              row.status === 'completed'
+                                ? 'opacity-40'
+                                : row.status !== 'dispatched'
+                                  ? 'text-slate-400 hover:text-amber-500 dark:text-slate-600 dark:hover:text-amber-400'
+                                  : 'text-emerald-500 hover:text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/20'
+                            }
                           >
-                            <CheckCircle className="h-4 w-4 text-emerald-500" />
+                            <CheckCircle className="h-4 w-4" />
                           </Button>
                           <Button 
                             variant="ghost" 
@@ -686,16 +711,16 @@ export default function GatePassRecords() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center text-emerald-600">
-              <CheckCircle className="h-5 w-5 mr-2" /> Confirm Complete
+              <CheckCircle className="h-5 w-5 mr-2" /> Confirm Post Gate Pass
             </DialogTitle>
             <DialogDescription>
-              Are you sure you want to complete Gate Pass {actionRecord?.gate_pass_no}? All invoices will be marked as Posted in Invoice Records. This will also prevent any further edits.
+              Are you sure you want to post Gate Pass <strong className="font-semibold text-slate-900 dark:text-slate-100">{actionRecord?.gate_pass_no}</strong>? All invoices will be marked as Posted in Invoice Records. This will also prevent any further edits.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCompleteConfirmOpen(false)}>Cancel</Button>
-            <Button className="bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => handleUpdateStatus('completed')}>
-              Complete Gate Pass
+            <Button className="bg-emerald-600 hover:bg-emerald-700 text-white font-medium" onClick={() => handleUpdateStatus('completed')}>
+              Post Gate Pass
             </Button>
           </DialogFooter>
         </DialogContent>

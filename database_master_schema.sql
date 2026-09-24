@@ -302,6 +302,28 @@ BEGIN
 END;
 $$;
 
+-- H. Gate Pass Status Workflow Integrity Trigger (Cannot Post before Dispatch)
+CREATE OR REPLACE FUNCTION public.trg_validate_gate_pass_status_flow()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, extensions
+AS $$
+BEGIN
+    -- If updating status to 'completed' (posted), it MUST have previously been 'dispatched'
+    IF NEW.status = 'completed' AND OLD.status IS DISTINCT FROM 'dispatched' THEN
+        RAISE EXCEPTION 'Cannot post Gate Pass %: goods must be dispatched before posting.', OLD.gate_pass_no;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_gate_pass_status_check ON public.gate_pass_records;
+CREATE TRIGGER trg_gate_pass_status_check
+BEFORE UPDATE OF status ON public.gate_pass_records
+FOR EACH ROW
+EXECUTE FUNCTION public.trg_validate_gate_pass_status_flow();
+
 -- ----------------------------------------------------------------------------
 -- 4. ROW LEVEL SECURITY (RLS) POLICIES
 -- ----------------------------------------------------------------------------
