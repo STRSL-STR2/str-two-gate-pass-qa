@@ -86,7 +86,12 @@ export default function CreateGatePass() {
         if (locs) setLocations(locs);
         if (drvs) setDrivers(drvs);
         if (times) setTimeSlots(times);
-        if (sets) setCompanySettings(sets);
+        if (sets) {
+          setCompanySettings(sets);
+          if (sets.signature_url) {
+            setSignature(sets.signature_url);
+          }
+        }
         
         let finalGpNumber = "STR2GP-0001";
         try {
@@ -161,31 +166,46 @@ export default function CreateGatePass() {
     }
 
     setSaving(true);
-    // Double check with database to enforce strict validation against saved records.
+    // Double check with database using fast RPC function
     try {
-      const { data: gpRecords, error } = await supabase
-        .from('gate_pass_records')
-        .select('gate_pass_no, rows');
-        
-      if (!error && gpRecords) {
-        let existingGpNo = null;
-        let existingInvoice = null;
-        
-        outer: for (const gp of gpRecords) {
-          const rows = gp.rows as any[];
-          for (const row of rows) {
-            if (selectedRows.some(sr => sr.invoice === row.invoice)) {
-              existingGpNo = gp.gate_pass_no;
-              existingInvoice = row.invoice;
-              break outer;
+      const invoiceList = selectedRows.map(r => String(r.invoice).trim()).filter(Boolean);
+      const { data: duplicateData, error: rpcErr } = await supabase.rpc('check_duplicate_invoices', {
+        target_invoices: invoiceList
+      });
+
+      if (!rpcErr && duplicateData && duplicateData.length > 0) {
+        const dup = duplicateData[0];
+        toast.error(`Validation Failed: Invoice ${dup.invoice} already exists in saved database records under Gate Pass [${dup.gate_pass_no}]. Cannot create gate pass.`);
+        setSaving(false);
+        return;
+      }
+
+      // Fallback check if RPC fails for any reason
+      if (rpcErr) {
+        const { data: gpRecords, error } = await supabase
+          .from('gate_pass_records')
+          .select('gate_pass_no, rows');
+          
+        if (!error && gpRecords) {
+          let existingGpNo = null;
+          let existingInvoice = null;
+          
+          outer: for (const gp of gpRecords) {
+            const rows = gp.rows as any[];
+            for (const row of rows) {
+              if (selectedRows.some(sr => sr.invoice === row.invoice)) {
+                existingGpNo = gp.gate_pass_no;
+                existingInvoice = row.invoice;
+                break outer;
+              }
             }
           }
-        }
 
-        if (existingGpNo) {
-          toast.error(`Validation Failed: Invoice ${existingInvoice} already exists in saved database records under Gate Pass [${existingGpNo}]. Cannot create gate pass.`);
-          setSaving(false);
-          return;
+          if (existingGpNo) {
+            toast.error(`Validation Failed: Invoice ${existingInvoice} already exists in saved database records under Gate Pass [${existingGpNo}]. Cannot create gate pass.`);
+            setSaving(false);
+            return;
+          }
         }
       }
     } catch (e) {

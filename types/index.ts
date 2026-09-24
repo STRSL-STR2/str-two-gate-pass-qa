@@ -91,4 +91,6 @@ export interface CompanySettings {
   registered_address: string;
   contact_line: string;
   logo_url: string;
+  signature_url?: string;
 }
+

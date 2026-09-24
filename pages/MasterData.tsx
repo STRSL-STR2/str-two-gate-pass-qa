@@ -335,30 +335,44 @@ export default function MasterData() {
       return;
     }
 
-    // Double check with database to be strictly safe
+    // Double check with database using fast RPC
     try {
-      const { data: gpRecords, error } = await supabase
-        .from('gate_pass_records')
-        .select('gate_pass_no, rows');
-        
-      if (!error && gpRecords) {
-        let existingGpNo = null;
-        let existingInvoice = null;
-        
-        outer: for (const gp of gpRecords) {
-          const rows = gp.rows as any[];
-          for (const row of rows) {
-            if (selectedInvoices.includes(row.invoice)) {
-              existingGpNo = gp.gate_pass_no;
-              existingInvoice = row.invoice;
-              break outer;
+      const invoiceList = selectedInvoices.map(inv => String(inv).trim()).filter(Boolean);
+      const { data: duplicateData, error: rpcErr } = await supabase.rpc('check_duplicate_invoices', {
+        target_invoices: invoiceList
+      });
+
+      if (!rpcErr && duplicateData && duplicateData.length > 0) {
+        const dup = duplicateData[0];
+        toast.error(`Blocked: Invoice ${dup.invoice} was already used in Gate Pass [${dup.gate_pass_no}].`);
+        return;
+      }
+
+      // Fallback
+      if (rpcErr) {
+        const { data: gpRecords, error } = await supabase
+          .from('gate_pass_records')
+          .select('gate_pass_no, rows');
+          
+        if (!error && gpRecords) {
+          let existingGpNo = null;
+          let existingInvoice = null;
+          
+          outer: for (const gp of gpRecords) {
+            const rows = gp.rows as any[];
+            for (const row of rows) {
+              if (selectedInvoices.includes(row.invoice)) {
+                existingGpNo = gp.gate_pass_no;
+                existingInvoice = row.invoice;
+                break outer;
+              }
             }
           }
-        }
 
-        if (existingGpNo) {
-          toast.error(`Blocked: Invoice ${existingInvoice} was already used in Gate Pass [${existingGpNo}] by another user.`);
-          return;
+          if (existingGpNo) {
+            toast.error(`Blocked: Invoice ${existingInvoice} was already used in Gate Pass [${existingGpNo}] by another user.`);
+            return;
+          }
         }
       }
     } catch (e) {

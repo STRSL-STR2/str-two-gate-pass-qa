@@ -15,24 +15,60 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 interface FileUploaderProps {
   label: string;
   value: string | null;
-  onChange: (base64: string | null) => void;
+  onChange: (url: string | null) => void;
   id: string;
+  folder?: "logo" | "signature";
 }
 
-function FileUploader({ label, value, onChange, id }: FileUploaderProps) {
+function FileUploader({ label, value, onChange, id, folder }: FileUploaderProps) {
   const [isDragging, setIsDragging] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFile = (file: File) => {
+  const handleFile = async (file: File) => {
     if (!file.type.startsWith("image/")) {
       toast.error("Please select an image file.");
       return;
     }
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      onChange(e.target?.result as string);
-    };
-    reader.readAsDataURL(file);
+
+    setIsUploading(true);
+    try {
+      if (folder) {
+        const fileExt = file.name.split(".").pop() || "png";
+        const filePath = `${folder}_${Date.now()}.${fileExt}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from("company-assets")
+          .upload(filePath, file, {
+            cacheControl: "3600",
+            upsert: true,
+          });
+
+        if (!uploadError) {
+          const { data } = supabase.storage
+            .from("company-assets")
+            .getPublicUrl(filePath);
+
+          onChange(data.publicUrl);
+          toast.success(`${label} uploaded successfully.`);
+          setIsUploading(false);
+          return;
+        } else {
+          console.warn("Storage upload failed, falling back to base64:", uploadError);
+        }
+      }
+
+      // Fallback to Base64 data URL
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        onChange(e.target?.result as string);
+        setIsUploading(false);
+      };
+      reader.readAsDataURL(file);
+    } catch (err: any) {
+      toast.error(`Upload failed: ${err.message}`);
+      setIsUploading(false);
+    }
   };
 
   const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
@@ -61,7 +97,12 @@ function FileUploader({ label, value, onChange, id }: FileUploaderProps) {
   return (
     <div className="space-y-2">
       <Label className="text-sm font-semibold text-gray-700 dark:text-gray-300">{label}</Label>
-      {value ? (
+      {isUploading ? (
+        <div className="border rounded-lg p-4 bg-gray-50/25 dark:bg-slate-900/10 flex flex-col items-center justify-center space-y-2 h-44">
+          <Loader2 className="h-8 w-8 animate-spin text-slate-500 mb-2" />
+          <p className="text-sm text-slate-600 dark:text-slate-400">Uploading image...</p>
+        </div>
+      ) : value ? (
         <div className="relative border rounded-lg p-4 bg-gray-50/25 dark:bg-slate-900/10 flex flex-col items-center justify-center space-y-2 h-44 group overflow-hidden">
           <img src={value} alt={label} className="max-h-32 object-contain rounded" referrerPolicy="no-referrer" />
           <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2 rounded-lg">
@@ -149,19 +190,21 @@ export default function Settings() {
         } else {
           localStorage.setItem('gate_pass_logo', cs.logo_url);
         }
+
+        if (cs.signature_url) {
+          setSignature(cs.signature_url);
+          localStorage.setItem('gate_pass_signature', cs.signature_url);
+        } else {
+          const savedSig = localStorage.getItem('gate_pass_signature');
+          setSignature(savedSig || "");
+        }
+
         setCompanySettings(cs);
       }
       if (drv) setDrivers(drv);
       if (loc) setLocations(loc);
       if (ts) setTimeSlots(ts);
       if (prof) setProfiles(prof);
-
-      const savedSig = localStorage.getItem('gate_pass_signature');
-      if (savedSig) {
-        setSignature(savedSig);
-      } else {
-        setSignature("");
-      }
     } catch (err: any) {
       toast.error(`Error loading settings: ${err.message}`);
     } finally {
@@ -238,7 +281,7 @@ export default function Settings() {
   const handleSaveCompanyInfo = async () => {
     if (!companySettings) return;
     try {
-      // 1. Try to save logo_url to Supabase table company_settings
+      // 1. Try to save logo_url and signature_url to Supabase table company_settings
       const { error } = await supabase
         .from('company_settings')
         .update({
@@ -246,7 +289,8 @@ export default function Settings() {
           business_address: companySettings.business_address,
           registered_address: companySettings.registered_address,
           contact_line: companySettings.contact_line,
-          logo_url: companySettings.logo_url
+          logo_url: companySettings.logo_url,
+          signature_url: signature
         })
         .eq('id', companySettings.id);
 
@@ -480,12 +524,14 @@ export default function Settings() {
                   value={companySettings?.logo_url || null}
                   onChange={(val) => setCompanySettings(prev => prev ? { ...prev, logo_url: val || "" } : null)}
                   id="logo-upload"
+                  folder="logo"
                 />
                 <FileUploader
                   label="Authorized Signature"
                   value={signature}
                   onChange={(val) => setSignature(val)}
                   id="signature-upload"
+                  folder="signature"
                 />
               </div>
             </CardContent>

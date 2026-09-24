@@ -71,7 +71,12 @@ export default function GatePassRecords() {
       if (error) throw error;
       
       setData(records as GatePassRecord[]);
-      if (settings) setCompanySettings(settings);
+      if (settings) {
+        setCompanySettings(settings);
+        if (settings.signature_url) {
+          setSignature(settings.signature_url);
+        }
+      }
     } catch (err: any) {
       toast.error(`Error loading records: ${err.message}`);
     } finally {
