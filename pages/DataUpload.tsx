@@ -6,7 +6,7 @@ import { useNavigate } from "react-router-dom";
 import * as XLSX from "xlsx";
 import Papa from "papaparse";
 import { format } from "date-fns";
-import { useAuth } from "@/context/AuthContext";
+import { useAuth } from "@/hooks/use-auth";
 import { logAuditActivity } from "@/lib/audit";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";

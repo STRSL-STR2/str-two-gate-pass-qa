@@ -4,7 +4,7 @@ import * as XLSX from "xlsx";
 import { format } from "date-fns";
 import { supabase } from "@/lib/supabase";
 import { toast } from "sonner";
-import { useAuth } from "@/context/AuthContext";
+import { useAuth } from "@/hooks/use-auth";
 import { CompanySettings, Driver, Location, TimeSlot, Profile, AuditLog } from "@/types";
 import { logAuditActivity } from "@/lib/audit";
 import { Card, CardContent, CardDescription, CardTitle, CardFooter } from "@/components/ui/card";
