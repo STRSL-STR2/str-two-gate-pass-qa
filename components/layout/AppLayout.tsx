@@ -15,8 +15,7 @@ import {
   Menu,
   UserCircle,
   ChevronLeft,
-  PanelLeft,
-  PanelLeftClose
+  ChevronRight
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
@@ -151,15 +150,17 @@ export function AppLayout() {
                 render={
                   <button
                     onClick={toggleSidebar}
+                    title="Expand sidebar"
                     className="h-10 w-10 rounded-xl bg-blue-600/20 border border-blue-500/30 flex items-center justify-center text-blue-400 hover:bg-blue-600/30 hover:border-blue-400 hover:text-blue-300 transition-all cursor-pointer shadow-sm group"
                   />
                 }
               >
-                <Building2 className="h-5 w-5 transition-transform duration-200 group-hover:scale-110" />
+                <Building2 className="h-5 w-5 transition-transform duration-200 group-hover:hidden" />
+                <ChevronRight className="h-5 w-5 transition-transform duration-200 hidden group-hover:block" />
               </TooltipTrigger>
               <TooltipContent side="right" sideOffset={12} className="bg-slate-900 border border-slate-700/80 text-white text-xs">
-                <p className="font-semibold text-blue-400">STR2 GP</p>
-                <p className="text-[10px] text-slate-400">Click to expand</p>
+                <p className="font-semibold text-blue-400">Expand Sidebar</p>
+                <p className="text-[10px] text-slate-400">Click to expand menu</p>
               </TooltipContent>
             </Tooltip>
           </div>
@@ -270,25 +271,6 @@ export function AppLayout() {
         {/* Top Navbar */}
         <header className="h-16 border-b bg-card flex items-center justify-between px-4 sticky top-0 z-10 transition-colors">
           <div className="flex items-center">
-            {/* Desktop Collapse/Expand Toggle */}
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="hidden md:flex mr-3 h-8 w-8 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg"
-                    onClick={toggleSidebar}
-                  />
-                }
-              >
-                {isCollapsed ? <PanelLeft className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
-              </TooltipTrigger>
-              <TooltipContent side="bottom" className="text-xs">
-                {isCollapsed ? "Expand sidebar" : "Collapse to icon rail"}
-              </TooltipContent>
-            </Tooltip>
-            
             {/* Mobile Sheet Drawer Trigger */}
             <Sheet open={isMobileOpen} onOpenChange={setIsMobileOpen}>
               <SheetTrigger className="md:hidden mr-2 p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center text-slate-600 dark:text-slate-400">
