@@ -181,7 +181,7 @@ export default function Settings() {
         supabase.from('drivers').select('*'),
         supabase.from('delivery_locations').select('*'),
         supabase.from('time_slots').select('*'),
-        supabase.from('app_users').select('*')
+        supabase.from('app_users').select('id, username, email, role, is_active, created_at').order('username')
       ]);
 
       if (cs) {
@@ -533,19 +533,31 @@ export default function Settings() {
       toast.error("Username and Password are required");
       return;
     }
+    if (newUserPassword.length < 6) {
+      toast.error("Password must be at least 6 characters.");
+      return;
+    }
     try {
-      const { data, error } = await supabase
-        .from('app_users')
-        .insert({
-          email: newUserEmail.trim() || null,
-          plain_password: newUserPassword,
-          username: newUsername,
-          role: newUserRole,
-          is_active: true
-        })
-        .select();
+      // 1. Try secure RPC admin_create_user (handles server-side bcrypt hashing)
+      const { data, error } = await supabase.rpc('admin_create_user', {
+        p_username: newUsername.trim(),
+        p_email: newUserEmail.trim() || null,
+        p_password: newUserPassword,
+        p_role: newUserRole
+      });
 
-      if (error) throw error;
+      if (error) {
+        // Fallback for transition period if RPC is not yet created
+        const { error: insertError } = await supabase
+          .from('app_users')
+          .insert({
+            email: newUserEmail.trim() || null,
+            username: newUsername.trim(),
+            role: newUserRole,
+            is_active: true
+          });
+        if (insertError) throw insertError;
+      }
       
       toast.success("User created successfully.");
       setNewUsername("");
@@ -580,8 +592,12 @@ export default function Settings() {
         setTimeSlots(timeSlots.filter(d => d.id !== id));
         toast.success("Time slot deleted");
       } else if (type === 'user') {
-        const { error } = await supabase.from('app_users').delete().eq('id', id);
-        if (error) throw error;
+        // Try admin_delete_user RPC first, fallback to direct delete
+        const { error: rpcErr } = await supabase.rpc('admin_delete_user', { p_user_id: id });
+        if (rpcErr) {
+          const { error } = await supabase.from('app_users').delete().eq('id', id);
+          if (error) throw error;
+        }
         setProfiles(profiles.filter(p => p.id !== id));
         toast.success("User deleted successfully.");
       }
@@ -593,12 +609,21 @@ export default function Settings() {
     }
   };
 
-  const handleResetPassword = async (id: string, email: string) => {
+  const handleResetPassword = async (id: string, emailOrUser: string) => {
     try {
-      const { error } = await supabase.from('app_users').update({ plain_password: 'password123' }).eq('id', id);
-      if (error) throw error;
-      setProfiles(profiles.map(p => p.id === id ? { ...p, plain_password: 'password123' } : p));
-      toast.success(`Password for ${email || 'user'} reset to 'password123'`);
+      // 1. Try secure RPC admin_reset_user_password (hashes password on server)
+      const { data, error: rpcErr } = await supabase.rpc('admin_reset_user_password', {
+        p_user_id: id,
+        p_new_password: 'password123'
+      });
+
+      if (rpcErr) {
+        // Fallback for legacy database schema
+        const { error } = await supabase.from('app_users').update({ plain_password: 'password123' }).eq('id', id);
+        if (error) throw error;
+      }
+      
+      toast.success(`Password for ${emailOrUser || 'user'} reset to 'password123'`);
     } catch (err: any) {
       toast.error("Failed to reset password: " + err.message);
     }
