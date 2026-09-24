@@ -538,7 +538,6 @@ export default function Settings() {
       return;
     }
     try {
-      // 1. Try secure RPC admin_create_user (handles server-side bcrypt hashing)
       const { data, error } = await supabase.rpc('admin_create_user', {
         p_username: newUsername.trim(),
         p_email: newUserEmail.trim() || null,
@@ -546,18 +545,7 @@ export default function Settings() {
         p_role: newUserRole
       });
 
-      if (error) {
-        // Fallback for transition period if RPC is not yet created
-        const { error: insertError } = await supabase
-          .from('app_users')
-          .insert({
-            email: newUserEmail.trim() || null,
-            username: newUsername.trim(),
-            role: newUserRole,
-            is_active: true
-          });
-        if (insertError) throw insertError;
-      }
+      if (error) throw error;
       
       toast.success("User created successfully.");
       setNewUsername("");
@@ -592,7 +580,6 @@ export default function Settings() {
         setTimeSlots(timeSlots.filter(d => d.id !== id));
         toast.success("Time slot deleted");
       } else if (type === 'user') {
-        // Try admin_delete_user RPC first, fallback to direct delete
         const { error: rpcErr } = await supabase.rpc('admin_delete_user', { p_user_id: id });
         if (rpcErr) {
           const { error } = await supabase.from('app_users').delete().eq('id', id);
@@ -611,17 +598,12 @@ export default function Settings() {
 
   const handleResetPassword = async (id: string, emailOrUser: string) => {
     try {
-      // 1. Try secure RPC admin_reset_user_password (hashes password on server)
       const { data, error: rpcErr } = await supabase.rpc('admin_reset_user_password', {
         p_user_id: id,
         p_new_password: 'password123'
       });
 
-      if (rpcErr) {
-        // Fallback for legacy database schema
-        const { error } = await supabase.from('app_users').update({ plain_password: 'password123' }).eq('id', id);
-        if (error) throw error;
-      }
+      if (rpcErr) throw rpcErr;
       
       toast.success(`Password for ${emailOrUser || 'user'} reset to 'password123'`);
     } catch (err: any) {

@@ -4,7 +4,6 @@ export interface Profile {
   id: string;
   username: string;
   email: string;
-  plain_password?: string;
   role: Role;
   is_active: boolean;
   created_at?: string;

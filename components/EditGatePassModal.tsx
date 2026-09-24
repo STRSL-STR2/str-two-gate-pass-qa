@@ -51,18 +51,33 @@ export function EditGatePassModal({ record, onClose, onSaved }: Props) {
       }
       const localMasterData: MasterDataRow[] = stored as MasterDataRow[];
       
-      const { data: gpRecords } = await supabase
-        .from('gate_pass_records')
-        .select('gate_pass_no, rows');
-        
+      const candidateInvoices = localMasterData.map(r => String(r.invoice).trim()).filter(Boolean);
       const issuedInvoices = new Set<string>();
-      if (gpRecords) {
-        for (const gp of gpRecords) {
-          const rows = gp.rows as any[];
-          for (const row of rows) {
-            issuedInvoices.add(row.invoice);
+
+      try {
+        const { data: duplicateData, error: rpcErr } = await supabase.rpc('check_duplicate_invoices', {
+          target_invoices: candidateInvoices
+        });
+
+        if (!rpcErr && duplicateData) {
+          for (const d of duplicateData) {
+            issuedInvoices.add(d.invoice);
+          }
+        } else {
+          const { data: gpRecords } = await supabase
+            .from('gate_pass_records')
+            .select('gate_pass_no, rows');
+          if (gpRecords) {
+            for (const gp of gpRecords) {
+              const rows = gp.rows as any[];
+              for (const row of rows) {
+                issuedInvoices.add(row.invoice);
+              }
+            }
           }
         }
+      } catch (err) {
+        console.warn("Could not check duplicate invoices via RPC", err);
       }
       
       // Determine customer name
