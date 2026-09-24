@@ -1,55 +1,100 @@
 -- ============================================================================
--- STR-TWO GATE PASS SYSTEM - SECURITY & RLS HARDENING SCRIPT
--- Target Environment: QA Supabase (adbbqlbnrrzlzhlbzkhu)
--- Run this in QA Supabase Dashboard -> SQL Editor -> New query -> Run
+-- STR-TWO GATE PASS SYSTEM - COMPLETE MASTER DATABASE SCHEMA
+-- Target Database: PostgreSQL / Supabase
+-- Contains: Tables, Constraints, Extensions, RPC Functions, RLS, & Performance Indexes
+-- Initial Data: Default Administrator Account Only ('admin' / 'admin123')
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
--- 1. ENABLE EXTENSIONS
+-- 1. EXTENSIONS
 -- ----------------------------------------------------------------------------
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
-
--- ----------------------------------------------------------------------------
--- 2. SECURE PASSWORD STORAGE MIGRATION FOR app_users
--- ----------------------------------------------------------------------------
--- Add password_hash column if it doesn't already exist
-ALTER TABLE public.app_users ADD COLUMN IF NOT EXISTS password_hash TEXT;
-
--- If plain_password column exists, migrate all plain passwords to bcrypt hashes
-DO $$
-BEGIN
-    IF EXISTS (
-        SELECT 1 
-        FROM information_schema.columns 
-        WHERE table_schema = 'public' 
-          AND table_name = 'app_users' 
-          AND column_name = 'plain_password'
-    ) THEN
-        -- Encrypt any non-migrated passwords
-        UPDATE public.app_users 
-        SET password_hash = crypt(plain_password, gen_salt('bf', 10))
-        WHERE (password_hash IS NULL OR password_hash = '') AND plain_password IS NOT NULL;
-
-        -- Safely drop plain_password column so passwords are never stored in clear text
-        ALTER TABLE public.app_users DROP COLUMN plain_password;
-    END IF;
-END $$;
-
--- Ensure default admin user exists with secure hash if table is empty
-INSERT INTO public.app_users (username, password_hash, role, is_active)
-VALUES ('admin', crypt('admin123', gen_salt('bf', 10)), 'admin', true)
-ON CONFLICT (username) DO UPDATE 
-SET password_hash = crypt('admin123', gen_salt('bf', 10))
-WHERE public.app_users.password_hash IS NULL OR public.app_users.password_hash = '';
-
--- Ensure password_hash is not nullable
-ALTER TABLE public.app_users ALTER COLUMN password_hash SET NOT NULL;
+-- Enable pgcrypto for industry-standard bcrypt password hashing
+CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA extensions;
+CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public;
 
 -- ----------------------------------------------------------------------------
--- 3. SECURE AUTHENTICATION & USER MANAGEMENT RPC FUNCTIONS
+-- 2. TABLE STRUCTURES (CLEAN SLATE SCHEMA)
 -- ----------------------------------------------------------------------------
 
--- A. Secure Login Function (Checks bcrypt hash, returns user profile)
+-- A. System Users Table (app_users)
+-- Passwords stored ONLY as bcrypt hashes (password_hash). Never plain text.
+CREATE TABLE IF NOT EXISTS public.app_users (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    username TEXT NOT NULL UNIQUE,
+    email TEXT,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'user',
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- B. Company / Organization Settings Table (company_settings)
+CREATE TABLE IF NOT EXISTS public.company_settings (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    company_name TEXT,
+    business_address TEXT,
+    registered_address TEXT,
+    contact_line TEXT,
+    logo_url TEXT,
+    signature_url TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- C. Delivery Locations Table (delivery_locations)
+CREATE TABLE IF NOT EXISTS public.delivery_locations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    location_name TEXT NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- D. Drivers Registry Table (drivers)
+CREATE TABLE IF NOT EXISTS public.drivers (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    driver_name TEXT NOT NULL,
+    vehicle_number TEXT NOT NULL,
+    phone_number TEXT,
+    nic TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- E. Delivery Time Slots Table (time_slots)
+CREATE TABLE IF NOT EXISTS public.time_slots (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    label TEXT NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- F. Gate Pass Records Table (gate_pass_records)
+CREATE TABLE IF NOT EXISTS public.gate_pass_records (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    gate_pass_no TEXT NOT NULL UNIQUE,
+    date TEXT,
+    time TEXT,
+    location TEXT,
+    vehicle_number TEXT,
+    driver_name TEXT,
+    phone_number TEXT,
+    nic TEXT,
+    customer_name TEXT,
+    created_by TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    status TEXT NOT NULL DEFAULT 'issued',
+    rows JSONB NOT NULL DEFAULT '[]'::jsonb,
+    total_mtrs NUMERIC DEFAULT 0,
+    total_value NUMERIC DEFAULT 0,
+    total_cartons NUMERIC DEFAULT 0,
+    invoice_count INT DEFAULT 0
+);
+
+-- ----------------------------------------------------------------------------
+-- 3. SECURE AUTHENTICATION & BUSINESS LOGIC RPC FUNCTIONS
+-- All functions include 'SET search_path = public, extensions' to resolve
+-- gen_salt('bf'::text, 10) and crypt() reliably in Supabase environments.
+-- ----------------------------------------------------------------------------
+
+-- A. User Login RPC
 CREATE OR REPLACE FUNCTION public.login_user(
     p_username TEXT,
     p_password TEXT
@@ -64,7 +109,7 @@ RETURNS TABLE (
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, extensions
 AS $$
 BEGIN
     RETURN QUERY
@@ -91,7 +136,7 @@ CREATE OR REPLACE FUNCTION public.change_user_password(
 RETURNS BOOLEAN
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, extensions
 AS $$
 DECLARE
     v_stored_hash TEXT;
@@ -115,7 +160,7 @@ BEGIN
 
     -- Update to new hashed password
     UPDATE public.app_users
-    SET password_hash = crypt(p_new_password, gen_salt('bf', 10))
+    SET password_hash = crypt(p_new_password, gen_salt('bf'::text, 10))
     WHERE id = p_user_id;
 
     RETURN TRUE;
@@ -132,7 +177,7 @@ CREATE OR REPLACE FUNCTION public.admin_create_user(
 RETURNS UUID
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, extensions
 AS $$
 DECLARE
     v_new_id UUID;
@@ -155,7 +200,7 @@ BEGIN
     VALUES (
         trim(p_username),
         nullif(trim(p_email), ''),
-        crypt(p_password, gen_salt('bf', 10)),
+        crypt(p_password, gen_salt('bf'::text, 10)),
         coalesce(p_role, 'user'),
         true
     )
@@ -173,7 +218,7 @@ CREATE OR REPLACE FUNCTION public.admin_reset_user_password(
 RETURNS BOOLEAN
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, extensions
 AS $$
 BEGIN
     IF char_length(p_new_password) < 6 THEN
@@ -181,7 +226,7 @@ BEGIN
     END IF;
 
     UPDATE public.app_users
-    SET password_hash = crypt(p_new_password, gen_salt('bf', 10))
+    SET password_hash = crypt(p_new_password, gen_salt('bf'::text, 10))
     WHERE id = p_user_id;
 
     RETURN TRUE;
@@ -195,7 +240,7 @@ CREATE OR REPLACE FUNCTION public.admin_delete_user(
 RETURNS BOOLEAN
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, extensions
 AS $$
 BEGIN
     DELETE FROM public.app_users WHERE id = p_user_id AND username <> 'admin';
@@ -203,11 +248,7 @@ BEGIN
 END;
 $$;
 
--- ----------------------------------------------------------------------------
--- 4. ATOMIC SEQUENCE & DUPLICATE VALIDATION RPCs
--- ----------------------------------------------------------------------------
-
--- A. Fast duplicate invoices check
+-- F. Fast Duplicate Invoices Checker
 CREATE OR REPLACE FUNCTION public.check_duplicate_invoices(
     target_invoices TEXT[]
 )
@@ -217,7 +258,7 @@ RETURNS TABLE (
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, extensions
 AS $$
 BEGIN
     RETURN QUERY
@@ -230,12 +271,12 @@ BEGIN
 END;
 $$;
 
--- B. Atomic next gate pass number generator
+-- G. Atomic Next Gate Pass Number Generator
 CREATE OR REPLACE FUNCTION public.get_next_gate_pass_number()
 RETURNS TEXT
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, extensions
 AS $$
 DECLARE
     v_max_num INT := 0;
@@ -262,7 +303,7 @@ END;
 $$;
 
 -- ----------------------------------------------------------------------------
--- 5. ROW LEVEL SECURITY (RLS) HARDENING
+-- 4. ROW LEVEL SECURITY (RLS) POLICIES
 -- ----------------------------------------------------------------------------
 
 -- Enable RLS across all tables
@@ -273,32 +314,33 @@ ALTER TABLE public.drivers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.time_slots ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.gate_pass_records ENABLE ROW LEVEL SECURITY;
 
--- Clean up existing insecure "Allow all" policies
-DROP POLICY IF EXISTS "Allow all for app_users" ON public.app_users;
+-- Clean existing policies
 DROP POLICY IF EXISTS "Allow read app_users" ON public.app_users;
-DROP POLICY IF EXISTS "Allow all for company_settings" ON public.company_settings;
+DROP POLICY IF EXISTS "Allow all for app_users" ON public.app_users;
 DROP POLICY IF EXISTS "Allow read company_settings" ON public.company_settings;
 DROP POLICY IF EXISTS "Allow update company_settings" ON public.company_settings;
+DROP POLICY IF EXISTS "Allow all for company_settings" ON public.company_settings;
 DROP POLICY IF EXISTS "Allow all for delivery_locations" ON public.delivery_locations;
 DROP POLICY IF EXISTS "Allow all for drivers" ON public.drivers;
 DROP POLICY IF EXISTS "Allow all for time_slots" ON public.time_slots;
-DROP POLICY IF EXISTS "Allow all for gate_pass_records" ON public.gate_pass_records;
 DROP POLICY IF EXISTS "Allow select gate_pass_records" ON public.gate_pass_records;
 DROP POLICY IF EXISTS "Allow insert gate_pass_records" ON public.gate_pass_records;
 DROP POLICY IF EXISTS "Allow update gate_pass_records" ON public.gate_pass_records;
+DROP POLICY IF EXISTS "Allow all for gate_pass_records" ON public.gate_pass_records;
 
--- A. app_users: Allow public to SELECT safe metadata (id, username, email, role, is_active)
--- Direct INSERT, UPDATE, and DELETE are strictly REVOKED (must go through SECURITY DEFINER RPCs)
+-- A. app_users Policies
+-- Safe SELECT of user metadata allowed for UI listing
 CREATE POLICY "Allow read app_users" 
 ON public.app_users 
 FOR SELECT 
 TO anon, authenticated 
 USING (true);
 
+-- Direct client INSERT, UPDATE, DELETE are strictly REVOKED (must use RPCs)
 REVOKE INSERT, UPDATE, DELETE ON public.app_users FROM anon;
 REVOKE INSERT, UPDATE, DELETE ON public.app_users FROM authenticated;
 
--- B. company_settings: Read for all, insert/update for all
+-- B. company_settings Policies
 CREATE POLICY "Allow read company_settings" 
 ON public.company_settings 
 FOR SELECT 
@@ -312,7 +354,7 @@ TO anon, authenticated
 USING (true) 
 WITH CHECK (true);
 
--- C. delivery_locations, drivers, time_slots: Read and manage
+-- C. Lookups Policies (locations, drivers, time_slots)
 CREATE POLICY "Allow all for delivery_locations" 
 ON public.delivery_locations 
 FOR ALL 
@@ -334,7 +376,7 @@ TO anon, authenticated
 USING (true) 
 WITH CHECK (true);
 
--- D. gate_pass_records: Allow SELECT, INSERT, UPDATE, but BLOCK direct DELETE
+-- D. gate_pass_records Policies
 CREATE POLICY "Allow select gate_pass_records" 
 ON public.gate_pass_records 
 FOR SELECT 
@@ -353,9 +395,10 @@ FOR UPDATE
 TO anon, authenticated 
 USING (true) 
 WITH CHECK (true);
+-- Note: Direct DELETE is blocked to preserve immutable audit trail
 
 -- ----------------------------------------------------------------------------
--- 6. GRANT EXECUTE ON ALL SECURE RPC FUNCTIONS
+-- 5. RPC EXECUTION PERMISSIONS
 -- ----------------------------------------------------------------------------
 GRANT EXECUTE ON FUNCTION public.login_user(TEXT, TEXT) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.change_user_password(UUID, TEXT, TEXT) TO anon, authenticated;
@@ -366,9 +409,24 @@ GRANT EXECUTE ON FUNCTION public.check_duplicate_invoices(TEXT[]) TO anon, authe
 GRANT EXECUTE ON FUNCTION public.get_next_gate_pass_number() TO anon, authenticated;
 
 -- ----------------------------------------------------------------------------
--- 7. PERFORMANCE INDEXES
+-- 6. PERFORMANCE INDEXES
 -- ----------------------------------------------------------------------------
+CREATE INDEX IF NOT EXISTS idx_gate_pass_records_rows ON public.gate_pass_records USING gin (rows);
 CREATE INDEX IF NOT EXISTS idx_gate_pass_records_created_at ON public.gate_pass_records (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_gate_pass_records_gp_no ON public.gate_pass_records (gate_pass_no);
-CREATE INDEX IF NOT EXISTS idx_gate_pass_records_rows ON public.gate_pass_records USING gin (rows);
 CREATE INDEX IF NOT EXISTS idx_app_users_username ON public.app_users (lower(username));
+
+-- ----------------------------------------------------------------------------
+-- 7. INITIAL MASTER DATA (DEFAULT ADMIN ONLY)
+-- ----------------------------------------------------------------------------
+-- Insert or update default system administrator ('admin' / 'admin123')
+INSERT INTO public.app_users (username, password_hash, role, is_active)
+VALUES ('admin', crypt('admin123', gen_salt('bf'::text, 10)), 'admin', true)
+ON CONFLICT (username) DO UPDATE 
+SET password_hash = crypt('admin123', gen_salt('bf'::text, 10))
+WHERE public.app_users.password_hash IS NULL OR public.app_users.password_hash = '';
+
+-- Initialize empty default company settings record if none exists
+INSERT INTO public.company_settings (company_name, business_address, registered_address, contact_line)
+SELECT 'STR Two', 'Business Address', 'Registered Address', '+94 11 2345678'
+WHERE NOT EXISTS (SELECT 1 FROM public.company_settings);
