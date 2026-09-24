@@ -162,7 +162,7 @@ export function AppLayout() {
           </div>
         </header>
 
-        <div className="flex-1 p-6 md:p-8 flex flex-col overflow-hidden">
+        <div className="flex-1 p-3 sm:p-4 md:p-5 pb-1 md:pb-1 flex flex-col overflow-hidden">
           <Outlet />
         </div>
       </main>
