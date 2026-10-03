@@ -20,7 +20,8 @@ interface DashboardMetrics {
 }
 
 export default function Dashboard() {
-  const [loading, setLoading] = useState(true);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
+  const [isFetching, setIsFetching] = useState(false);
   const [metrics, setMetrics] = useState<DashboardMetrics>({
     totalMtrs: 0,
     totalValue: 0,
@@ -49,16 +50,29 @@ export default function Dashboard() {
   const [preset, setPreset] = useState("current-month");
   const [chartGranularity, setChartGranularity] = useState("Daily");
 
+  const handleRangeChange = (newStart: string, newEnd: string, newPreset: PresetRange) => {
+    setStartDate(newStart);
+    setEndDate(newEnd);
+    setPreset(newPreset);
+  };
 
   useEffect(() => {
+    if (!startDate || !endDate) return;
+
+    const [sYear, sMonth, sDay] = startDate.split('-').map(Number);
+    const start = new Date(sYear, sMonth - 1, sDay, 0, 0, 0, 0);
+    const [eYear, eMonth, eDay] = endDate.split('-').map(Number);
+    const end = new Date(eYear, eMonth - 1, eDay, 23, 59, 59, 999);
+
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) return;
+    if (start > end) {
+      toast.error("Start date cannot be after end date");
+      return;
+    }
+
     const fetchDashboardData = async () => {
       try {
-        setLoading(true);
-
-        const [sYear, sMonth, sDay] = startDate.split('-').map(Number);
-        const start = new Date(sYear, sMonth - 1, sDay, 0, 0, 0, 0);
-        const [eYear, eMonth, eDay] = endDate.split('-').map(Number);
-        const end = new Date(eYear, eMonth - 1, eDay, 23, 59, 59, 999);
+        setIsFetching(true);
         
         const daysDiff = differenceInDays(end, start);
         let currentGranularity = "Daily";
@@ -163,20 +177,13 @@ export default function Dashboard() {
       } catch (err: any) {
         toast.error(`Failed to load dashboard: ${err.message}`);
       } finally {
-        setLoading(false);
+        setIsFetching(false);
+        setIsInitialLoading(false);
       }
     };
 
     fetchDashboardData();
-  }, [startDate, endDate, preset]);
-
-  if (loading) {
-    return (
-      <div className="flex h-64 items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      </div>
-    );
-  }
+  }, [startDate, endDate]);
 
   const COLORS = ['#0f172a', '#334155', '#475569', '#64748b', '#94a3b8'];
 
@@ -189,14 +196,22 @@ export default function Dashboard() {
             startDate={startDate}
             endDate={endDate}
             preset={preset}
+            onRangeChange={handleRangeChange}
             onPresetChange={setPreset as any}
             onStartDateChange={setStartDate}
             onEndDateChange={setEndDate}
+            isLoading={isInitialLoading || isFetching}
           />
         } 
       />
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
+      {isInitialLoading ? (
+        <div className="flex h-64 items-center justify-center">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        </div>
+      ) : (
+        <div className={`space-y-6 transition-opacity duration-200 ${isFetching ? 'opacity-60 pointer-events-none' : 'opacity-100'}`}>
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Quantity (MTRS)</CardTitle>
@@ -352,6 +367,8 @@ export default function Dashboard() {
           </CardContent>
         </Card>
       </div>
+        </div>
+      )}
 
     </div>
   );
