@@ -913,66 +913,71 @@ export default function GatePassRecords() {
             {viewingRecord && (
               <div className="border bg-white rounded-md p-8 text-black gate-pass-container shadow-sm mx-auto min-w-[800px] max-w-[900px]" ref={printRef}>
         
-                <div className="text-center mb-6 pt-4">
+                <div className="text-center mb-6 pt-4 gp-header">
                   {companyLogo && (
                     <div className="flex justify-center mb-4">
-                      <img src={companyLogo} alt="Company Logo" className="h-16 object-contain" referrerPolicy="no-referrer" />
+                      <img src={companyLogo} alt="Company Logo" className="gp-logo h-16 object-contain" referrerPolicy="no-referrer" />
                     </div>
                   )}
-                  <h2 className="text-xl sm:text-2xl font-bold uppercase">{companySettings?.company_name || 'Stretchline (Private) Limited - Mount Lavinia'}</h2>
-                  <p className="text-sm">{companySettings?.business_address}</p>
-                  {companySettings?.registered_address && <p className="text-sm">{companySettings.registered_address}</p>}
-                  <p className="text-sm">{companySettings?.contact_line}</p>
-                  <div className="mt-4 py-2 border-y-2 border-black font-bold text-lg text-center tracking-widest">
+                  <h2 className="gp-company-title text-xl sm:text-2xl font-bold uppercase">{companySettings?.company_name || 'Stretchline (Private) Limited - Mount Lavinia'}</h2>
+                  <p className="gp-company-text text-sm">{companySettings?.business_address}</p>
+                  {companySettings?.registered_address && <p className="gp-company-text text-sm">{companySettings.registered_address}</p>}
+                  <p className="gp-company-text text-sm">{companySettings?.contact_line}</p>
+                  <div className="gp-controlled mt-4 py-2 border-y-2 border-black font-bold text-lg text-center tracking-widest">
                     CONTROLLED BY COMMERCIAL & LOGISTICS DEPARTMENT
                   </div>
-                  <h3 className="mt-4 text-xl font-bold uppercase underline">GATE PASS</h3>
+                  <h3 className="gp-title mt-4 text-xl font-bold uppercase underline">GATE PASS</h3>
                 </div>
 
-                <div className="grid grid-cols-2 gap-x-12 gap-y-4 mb-6 text-sm">
-                  <div className="flex gap-2">
-                    <span className="font-semibold w-24 text-right">Gate Pass No :</span>
-                    <span className="font-bold">{viewingRecord.gate_pass_no}</span>
+                <div className="gp-details-row mb-6 text-sm">
+                  <div className="gp-details-col">
+                    <div className="gp-field flex gap-2">
+                      <span className="gp-field-label font-semibold w-24 text-right">Gate Pass No :</span>
+                      <span className="gp-field-value font-bold">{viewingRecord.gate_pass_no}</span>
+                    </div>
+                    <div className="gp-field flex gap-2">
+                      <span className="gp-field-label font-semibold w-24 text-right">Date :</span>
+                      <span className="gp-field-value">{viewingRecord.date}</span>
+                    </div>
+                    <div className="gp-field flex gap-2">
+                      <span className="gp-field-label font-semibold w-24 text-right">Time :</span>
+                      <span className="gp-field-value">{viewingRecord.time}</span>
+                    </div>
+                    <div className="gp-field flex gap-2">
+                      <span className="gp-field-label font-semibold w-24 text-right">Location :</span>
+                      <span className="gp-field-value">{viewingRecord.location}</span>
+                    </div>
+                    <div className="gp-field flex gap-2 min-w-0">
+                      <span className="gp-field-label font-semibold w-24 text-right">Customer:</span>
+                      <span className="gp-field-value truncate" title={viewingRecord.customer_name}>{viewingRecord.customer_name}</span>
+                    </div>
+                    <div className="gp-field flex gap-2 whitespace-nowrap">
+                      <span className="gp-field-label font-semibold w-24 text-right">Seal Number :</span>
+                      <span className="gp-field-value">..............................................</span>
+                    </div>
                   </div>
-                  <div className="flex gap-2">
-                    <span className="font-semibold w-24 text-right">Vehicle No :</span>
-                    <span>{viewingRecord.vehicle_number}</span>
-                  </div>
-                  <div className="flex gap-2">
-                    <span className="font-semibold w-24 text-right">Date :</span>
-                    <span>{viewingRecord.date}</span>
-                  </div>
-                  <div className="flex gap-2">
-                    <span className="font-semibold w-24 text-right">Driver Name :</span>
-                    <span>{viewingRecord.driver_name}</span>
-                  </div>
-                  <div className="flex gap-2">
-                    <span className="font-semibold w-24 text-right">Time :</span>
-                    <span>{viewingRecord.time}</span>
-                  </div>
-                  <div className="flex gap-2">
-                    <span className="font-semibold w-24 text-right">Phone No :</span>
-                    <span>{viewingRecord.phone_number}</span>
-                  </div>
-                  <div className="flex gap-2">
-                    <span className="font-semibold w-24 text-right">Location :</span>
-                    <span>{viewingRecord.location}</span>
-                  </div>
-                  <div className="flex gap-2">
-                    <span className="font-semibold w-24 text-right">Driver NIC :</span>
-                    <span>{viewingRecord.nic}</span>
-                  </div>
-                  <div className="flex gap-2 min-w-0">
-                    <span className="font-semibold w-24 text-right">Customer:</span>
-                    <span className="truncate" title={viewingRecord.customer_name}>{viewingRecord.customer_name}</span>
-                  </div>
-                  <div className="flex gap-2 whitespace-nowrap">
-                    <span className="font-semibold w-24 text-right">Seal Number :</span>
-                    <span>..............................................</span>
+
+                  <div className="gp-details-col">
+                    <div className="gp-field flex gap-2">
+                      <span className="gp-field-label font-semibold w-24 text-right">Vehicle No :</span>
+                      <span className="gp-field-value">{viewingRecord.vehicle_number}</span>
+                    </div>
+                    <div className="gp-field flex gap-2">
+                      <span className="gp-field-label font-semibold w-24 text-right">Driver Name :</span>
+                      <span className="gp-field-value">{viewingRecord.driver_name}</span>
+                    </div>
+                    <div className="gp-field flex gap-2">
+                      <span className="gp-field-label font-semibold w-24 text-right">Phone No :</span>
+                      <span className="gp-field-value">{viewingRecord.phone_number}</span>
+                    </div>
+                    <div className="gp-field flex gap-2">
+                      <span className="gp-field-label font-semibold w-24 text-right">Driver NIC :</span>
+                      <span className="gp-field-value">{viewingRecord.nic}</span>
+                    </div>
                   </div>
                 </div>
 
-                <table className="w-full text-sm border-collapse border border-black mb-6">
+                <table className="gp-table w-full text-sm border-collapse border border-black mb-6">
                   <thead>
                     <tr className="bg-gray-100">
                       <th className="border border-black p-2 w-10">NO</th>
@@ -1004,18 +1009,18 @@ export default function GatePassRecords() {
                   <div>TOTAL NUMBER OF CARTONS = <span className="border-b border-black inline-block w-16 text-center">{viewingRecord.total_cartons}</span></div>
                 </div>
 
-                <div className="grid grid-cols-3 gap-8 text-center mt-12 mb-8 animate-fade-in">
-                  <div className="flex flex-col items-center justify-end h-24">
+                <div className="gp-signatures flex justify-between text-center mt-12 mb-8 animate-fade-in">
+                  <div className="gp-sig-box flex flex-col items-center justify-end h-24">
                     {signature && (
-                      <img src={signature} alt="Authorized Signature" className="max-h-16 max-w-[150px] object-contain mb-1" referrerPolicy="no-referrer" />
+                      <img src={signature} alt="Authorized Signature" className="gp-sig-img max-h-16 max-w-[150px] object-contain mb-1" referrerPolicy="no-referrer" />
                     )}
-                    <div className="w-full border-t border-black pt-2 px-4 font-semibold">Authorized By</div>
+                    <div className="gp-sig-line w-full border-t border-black pt-2 px-4 font-semibold">Authorized By</div>
                   </div>
-                  <div className="flex flex-col items-center justify-end h-24">
-                    <div className="w-full border-t border-black pt-2 px-4 font-semibold">Issued By</div>
+                  <div className="gp-sig-box flex flex-col items-center justify-end h-24">
+                    <div className="gp-sig-line w-full border-t border-black pt-2 px-4 font-semibold">Issued By</div>
                   </div>
-                  <div className="flex flex-col items-center justify-end h-24">
-                    <div className="w-full border-t border-black pt-2 px-4 font-semibold">Received By</div>
+                  <div className="gp-sig-box flex flex-col items-center justify-end h-24">
+                    <div className="gp-sig-line w-full border-t border-black pt-2 px-4 font-semibold">Received By</div>
                   </div>
                 </div>
 

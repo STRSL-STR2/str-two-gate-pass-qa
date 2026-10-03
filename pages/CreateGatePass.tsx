@@ -364,20 +364,20 @@ export default function CreateGatePass() {
         <div className="bg-white p-8 text-black gate-pass-container shadow-sm mx-auto min-w-[800px] max-w-[900px]" ref={printRef}>
           
           {/* Print Header */}
-        <div className="text-center mb-6">
+        <div className="text-center mb-6 gp-header">
           {companyLogo && (
             <div className="flex justify-center mb-4">
-              <img src={companyLogo} alt="Company Logo" className="h-16 object-contain" referrerPolicy="no-referrer" />
+              <img src={companyLogo} alt="Company Logo" className="gp-logo h-16 object-contain" referrerPolicy="no-referrer" />
             </div>
           )}
-          <h2 className="text-2xl font-bold uppercase">{companySettings?.company_name || 'Stretchline (Private) Limited - Mount Lavinia'}</h2>
-          <p className="text-sm">{companySettings?.business_address}</p>
-          {companySettings?.registered_address && <p className="text-sm">{companySettings.registered_address}</p>}
-          <p className="text-sm">{companySettings?.contact_line}</p>
-          <div className="mt-4 py-2 border-y-2 border-black font-bold text-lg text-center tracking-widest">
+          <h2 className="gp-company-title text-2xl font-bold uppercase">{companySettings?.company_name || 'Stretchline (Private) Limited - Mount Lavinia'}</h2>
+          <p className="gp-company-text text-sm">{companySettings?.business_address}</p>
+          {companySettings?.registered_address && <p className="gp-company-text text-sm">{companySettings.registered_address}</p>}
+          <p className="gp-company-text text-sm">{companySettings?.contact_line}</p>
+          <div className="gp-controlled mt-4 py-2 border-y-2 border-black font-bold text-lg text-center tracking-widest">
             CONTROLLED BY COMMERCIAL & LOGISTICS DEPARTMENT
           </div>
-          <h3 className="mt-4 text-xl font-bold uppercase underline">GATE PASS</h3>
+          <h3 className="gp-title mt-4 text-xl font-bold uppercase underline">GATE PASS</h3>
         </div>
 
         {/* Form Details Grid */}
@@ -467,7 +467,7 @@ export default function CreateGatePass() {
         </div>
 
         {/* Invoice Table */}
-        <table className="w-full text-sm border-collapse border border-black mb-6">
+        <table className="gp-table w-full text-sm border-collapse border border-black mb-6">
           <thead>
             <tr className="bg-gray-100">
               <th className="border border-black p-2 w-10">NO</th>
@@ -507,18 +507,18 @@ export default function CreateGatePass() {
           <div>TOTAL NUMBER OF CARTONS = <span className="border-b border-black inline-block w-16 text-center">{totalCartons}</span></div>
         </div>
 
-        <div className="grid grid-cols-3 gap-8 text-center mt-12 mb-8 animate-fade-in print:break-inside-avoid">
-          <div className="flex flex-col items-center justify-end h-24">
+        <div className="gp-signatures flex justify-between text-center mt-12 mb-8 animate-fade-in print:break-inside-avoid">
+          <div className="gp-sig-box flex flex-col items-center justify-end h-24">
             {signature && (
-              <img src={signature} alt="Authorized Signature" className="max-h-16 max-w-[150px] object-contain mb-1" referrerPolicy="no-referrer" />
+              <img src={signature} alt="Authorized Signature" className="gp-sig-img max-h-16 max-w-[150px] object-contain mb-1" referrerPolicy="no-referrer" />
             )}
-            <div className="w-full border-t border-black pt-2 px-4 font-semibold">Authorized By</div>
+            <div className="gp-sig-line w-full border-t border-black pt-2 px-4 font-semibold">Authorized By</div>
           </div>
-          <div className="flex flex-col items-center justify-end h-24">
-            <div className="w-full border-t border-black pt-2 px-4 font-semibold">Issued By</div>
+          <div className="gp-sig-box flex flex-col items-center justify-end h-24">
+            <div className="gp-sig-line w-full border-t border-black pt-2 px-4 font-semibold">Issued By</div>
           </div>
-          <div className="flex flex-col items-center justify-end h-24">
-            <div className="w-full border-t border-black pt-2 px-4 font-semibold">Received By</div>
+          <div className="gp-sig-box flex flex-col items-center justify-end h-24">
+            <div className="gp-sig-line w-full border-t border-black pt-2 px-4 font-semibold">Received By</div>
           </div>
         </div>
 
