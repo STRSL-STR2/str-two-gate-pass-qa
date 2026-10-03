@@ -98,6 +98,7 @@ export default function GatePassRecords() {
         setCompanySettings(settings);
         if (settings.signature_url) {
           setSignature(settings.signature_url);
+          localStorage.setItem('gate_pass_signature', settings.signature_url);
         }
       }
     } catch (err: any) {
@@ -112,8 +113,6 @@ export default function GatePassRecords() {
     const savedSig = localStorage.getItem('gate_pass_signature');
     if (savedSig) {
       setSignature(savedSig);
-    } else {
-      setSignature("");
     }
   }, []);
 

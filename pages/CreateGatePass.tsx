@@ -130,6 +130,7 @@ export default function CreateGatePass() {
           setCompanySettings(sets);
           if (sets.signature_url) {
             setSignature(sets.signature_url);
+            localStorage.setItem('gate_pass_signature', sets.signature_url);
           }
         }
         
