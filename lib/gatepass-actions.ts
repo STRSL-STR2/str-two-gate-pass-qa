@@ -34,6 +34,17 @@ export const downloadGatePassAsPdf = async (
       useCORS: true,
       logging: false,
       backgroundColor: "#ffffff",
+      onclone: (clonedDoc: Document) => {
+        // Sanitize any styles that html2canvas cannot parse
+        const styles = clonedDoc.querySelectorAll("style");
+        styles.forEach((style) => {
+          if (style.innerHTML) {
+            style.innerHTML = style.innerHTML
+              .replace(/oklch\([^)]+\)/gi, "#000000")
+              .replace(/color-mix\([^)]+\)/gi, "#000000");
+          }
+        });
+      },
     });
 
     const imgData = canvas.toDataURL("image/png");
