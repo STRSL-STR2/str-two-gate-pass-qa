@@ -1,5 +1,6 @@
 "use client"
 
+import * as React from "react"
 import { Tooltip as TooltipPrimitive } from "@base-ui/react/tooltip"
 
 import { cn } from "@/lib/utils"
@@ -17,7 +18,7 @@ function TooltipProvider({
   )
 }
 
-function Tooltip({ ...props }: TooltipPrimitive.Root.Props) {
+function Tooltip({ ...props }: TooltipPrimitive.Root.Props & { children?: React.ReactNode; key?: React.Key }) {
   return <TooltipPrimitive.Root data-slot="tooltip" {...props} />
 }
 

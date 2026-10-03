@@ -9,10 +9,49 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
-import { Loader2, Printer, Save, AlertTriangle } from "lucide-react";
+import { Loader2, Printer, Save, AlertTriangle, Download, Mail } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { format } from "date-fns";
 import { useReactToPrint } from "react-to-print";
+import { downloadGatePassAsPdf, openOutlookEmailComposer } from "@/lib/gatepass-actions";
+
+export const getNextGatePassNo = async (): Promise<string> => {
+  const now = new Date();
+  const yy = format(now, "yy");
+  const mmm = format(now, "MMM").toUpperCase();
+  const defaultNumber = `STR2GP-${yy}-${mmm}-0001`;
+
+  try {
+    const { data: rpcNo, error: rpcErr } = await supabase.rpc('get_next_gate_pass_number');
+    if (!rpcErr && rpcNo && typeof rpcNo === 'string' && rpcNo.startsWith('STR2GP-')) {
+      return rpcNo;
+    }
+  } catch (e) {
+    console.warn("RPC get_next_gate_pass_number error, checking client-side:", e);
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from("gate_pass_records")
+      .select("gate_pass_no");
+
+    if (error || !data) return defaultNumber;
+
+    let maxNum = 0;
+    const yearPattern = new RegExp(`^STR2GP-${yy}-[A-Za-z]{3}-(\\d+)$`);
+    for (const row of data) {
+      const match = row.gate_pass_no?.match(yearPattern);
+      if (match) {
+        const num = parseInt(match[1], 10);
+        if (num > maxNum) maxNum = num;
+      }
+    }
+    return `STR2GP-${yy}-${mmm}-${(maxNum + 1).toString().padStart(4, "0")}`;
+  } catch (e) {
+    console.error("Error computing next gate pass number:", e);
+    return defaultNumber;
+  }
+};
 
 export default function CreateGatePass() {
   const { state } = useLocation();
@@ -94,46 +133,7 @@ export default function CreateGatePass() {
           }
         }
         
-        let finalGpNumber = "STR2GP-0001";
-        try {
-          // Sort alphabetically desc to grab highest prefix suffix
-          const { data: alphabeticalData, error: alphaErr } = await supabase
-            .from("gate_pass_records")
-            .select("gate_pass_no")
-            .order("gate_pass_no", { ascending: false })
-            .limit(1);
-
-          let maxNum = 0;
-          if (!alphaErr && alphabeticalData && alphabeticalData.length > 0) {
-            const match = alphabeticalData[0].gate_pass_no.match(/STR2GP-(\d+)/);
-            if (match) {
-              maxNum = Math.max(maxNum, parseInt(match[1], 10));
-            }
-          }
-
-          // Double check sorting by ID desc
-          const { data: latestData, error: latestErr } = await supabase
-            .from("gate_pass_records")
-            .select("gate_pass_no")
-            .order("id", { ascending: false })
-            .limit(1);
-
-          if (!latestErr && latestData && latestData.length > 0) {
-            const match = latestData[0].gate_pass_no.match(/STR2GP-(\d+)/);
-            if (match) {
-              maxNum = Math.max(maxNum, parseInt(match[1], 10));
-            }
-          }
-
-          if (maxNum > 0) {
-            finalGpNumber = `STR2GP-${(maxNum + 1).toString().padStart(4, "0")}`;
-          } else if (!countErr && gpCount !== null) {
-            finalGpNumber = `STR2GP-${(gpCount + 1).toString().padStart(4, "0")}`;
-          }
-        } catch (e) {
-          console.error("Error finding maximum gate pass suffix:", e);
-        }
-
+        const finalGpNumber = await getNextGatePassNo();
         setGpNumber(finalGpNumber);
       } catch (err) {
         console.error("Error loading gate pass prereqs", err);
@@ -226,45 +226,8 @@ export default function CreateGatePass() {
     
     while (attempt < maxAttempts) {
       try {
-        let currentGpNo = gpNumber;
-        
-        // Attempt to get the next gate pass number atomically via RPC
-        const { data: rpcGpNo, error: rpcError } = await supabase.rpc('get_next_gate_pass_number');
-        if (!rpcError && rpcGpNo) {
-          currentGpNo = rpcGpNo;
-        } else if (attempt > 0) {
-          // Fallback to client-side max+1 calculation if RPC doesn't exist or fails
-          let maxNum = 0;
-          const { data: alphabeticalData } = await supabase
-            .from("gate_pass_records")
-            .select("gate_pass_no")
-            .order("gate_pass_no", { ascending: false })
-            .limit(1);
-
-          if (alphabeticalData && alphabeticalData.length > 0) {
-            const match = alphabeticalData[0].gate_pass_no.match(/STR2GP-(\d+)/);
-            if (match) {
-              maxNum = Math.max(maxNum, parseInt(match[1], 10));
-            }
-          }
-
-          const { data: latestData } = await supabase
-            .from("gate_pass_records")
-            .select("gate_pass_no")
-            .order("id", { ascending: false })
-            .limit(1);
-
-          if (latestData && latestData.length > 0) {
-            const match = latestData[0].gate_pass_no.match(/STR2GP-(\d+)/);
-            if (match) {
-              maxNum = Math.max(maxNum, parseInt(match[1], 10));
-            }
-          }
-
-          const nextId = maxNum + 1;
-          currentGpNo = `STR2GP-${nextId.toString().padStart(4, "0")}`;
-          setGpNumber(currentGpNo);
-        }
+        let currentGpNo = await getNextGatePassNo();
+        setGpNumber(currentGpNo);
 
         const gRows = selectedRows.map(r => ({
           ...r,
@@ -361,11 +324,35 @@ export default function CreateGatePass() {
 
   return (
     <div className="flex flex-col flex-1 h-full overflow-y-auto pb-6 space-y-6 max-w-[1000px] mx-auto w-full">
-      <div className="flex justify-end items-center no-print mb-2">
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={() => navigate("/master-data")}>Cancel</Button>
-          <Button variant="secondary" onClick={() => handlePrint()}><Printer className="mr-2 h-4 w-4" /> Print</Button>
-          <Button onClick={handleCreate} disabled={saving}>
+      <div className="flex flex-wrap justify-between items-center no-print mb-2 gap-2">
+        <Button variant="outline" onClick={() => navigate("/master-data")}>
+          Cancel
+        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="secondary" onClick={() => handlePrint()}>
+            <Printer className="mr-2 h-4 w-4" /> Print
+          </Button>
+          <Button variant="outline" onClick={() => downloadGatePassAsPdf(printRef.current, gpNumber)}>
+            <Download className="mr-2 h-4 w-4" /> Download PDF
+          </Button>
+          <Button variant="outline" onClick={() => openOutlookEmailComposer({
+            gate_pass_no: gpNumber,
+            date,
+            time: timeSlot,
+            location: locationName,
+            vehicle_number: vehicleNo,
+            driver_name: selectedDriver?.driver_name,
+            phone_number: selectedDriver?.phone_number,
+            nic: selectedDriver?.nic,
+            customer_name: selectedRows[0]?.name,
+            total_cartons: totalCartons,
+            total_mtrs: totalMtrs,
+            total_value: totalValue,
+            invoice_count: selectedRows.length
+          })}>
+            <Mail className="mr-2 h-4 w-4" /> Email (Outlook)
+          </Button>
+          <Button onClick={handleCreate} disabled={saving} className="bg-blue-600 hover:bg-blue-700 text-white">
             {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
             Save Gate Pass
           </Button>
@@ -393,16 +380,16 @@ export default function CreateGatePass() {
         </div>
 
         {/* Form Details Grid */}
-        <div className="grid grid-cols-2 gap-x-12 gap-y-4 mb-6">
-          <div className="grid grid-cols-[120px_1fr] items-center gap-2">
-            <Label className="font-semibold text-right">Gate Pass No :</Label>
-            <div className="font-bold">{gpNumber}</div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-3 mb-6">
+          <div className="grid grid-cols-[130px_1fr] items-center gap-2">
+            <Label className="font-semibold text-right text-xs">Gate Pass No :</Label>
+            <div className="font-bold text-sm px-3 py-1 bg-slate-50 border border-slate-200 rounded min-h-[32px] flex items-center">{gpNumber}</div>
           </div>
           
-          <div className="grid grid-cols-[120px_1fr] items-center gap-2">
-            <Label className="font-semibold text-right">Vehicle No :</Label>
+          <div className="grid grid-cols-[130px_1fr] items-center gap-2">
+            <Label className="font-semibold text-right text-xs">Vehicle No :</Label>
             <Select value={vehicleNo} onValueChange={setVehicleNo}>
-              <SelectTrigger className="h-8 border-gray-300">
+              <SelectTrigger className="w-full h-8 border-gray-300 text-xs">
                 <SelectValue placeholder="Select Vehicle" />
               </SelectTrigger>
               <SelectContent>
@@ -413,22 +400,22 @@ export default function CreateGatePass() {
             </Select>
           </div>
 
-          <div className="grid grid-cols-[120px_1fr] items-center gap-2">
-            <Label className="font-semibold text-right">Date :</Label>
-            <Input type="date" value={date} onChange={e => setDate(e.target.value)} className="h-8 border-gray-300" />
+          <div className="grid grid-cols-[130px_1fr] items-center gap-2">
+            <Label className="font-semibold text-right text-xs">Date :</Label>
+            <Input type="date" value={date} onChange={e => setDate(e.target.value)} className="w-full h-8 border-gray-300 text-xs" />
           </div>
 
-          <div className="grid grid-cols-[120px_1fr] items-center gap-2">
-            <Label className="font-semibold text-right">Driver Name :</Label>
-            <div className="px-3 py-1 bg-gray-50 border border-gray-200 rounded min-h-[32px]">
+          <div className="grid grid-cols-[130px_1fr] items-center gap-2">
+            <Label className="font-semibold text-right text-xs">Driver Name :</Label>
+            <div className="px-3 py-1 bg-gray-50 border border-gray-200 rounded min-h-[32px] flex items-center text-xs w-full">
               {selectedDriver?.driver_name || ""}
             </div>
           </div>
 
-          <div className="grid grid-cols-[120px_1fr] items-center gap-2">
-            <Label className="font-semibold text-right">Time :</Label>
+          <div className="grid grid-cols-[130px_1fr] items-center gap-2">
+            <Label className="font-semibold text-right text-xs">Time :</Label>
             <Select value={timeSlot} onValueChange={setTimeSlot}>
-              <SelectTrigger className="h-8 border-gray-300">
+              <SelectTrigger className="w-full h-8 border-gray-300 text-xs">
                 <SelectValue placeholder="Select Time" />
               </SelectTrigger>
               <SelectContent>
@@ -439,17 +426,17 @@ export default function CreateGatePass() {
             </Select>
           </div>
 
-          <div className="grid grid-cols-[120px_1fr] items-center gap-2">
-            <Label className="font-semibold text-right">Phone No :</Label>
-            <div className="px-3 py-1 bg-gray-50 border border-gray-200 rounded min-h-[32px]">
+          <div className="grid grid-cols-[130px_1fr] items-center gap-2">
+            <Label className="font-semibold text-right text-xs">Phone No :</Label>
+            <div className="px-3 py-1 bg-gray-50 border border-gray-200 rounded min-h-[32px] flex items-center text-xs w-full">
               {selectedDriver?.phone_number || ""}
             </div>
           </div>
 
-          <div className="grid grid-cols-[120px_1fr] items-center gap-2">
-            <Label className="font-semibold text-right">Location :</Label>
+          <div className="grid grid-cols-[130px_1fr] items-center gap-2">
+            <Label className="font-semibold text-right text-xs">Location :</Label>
             <Select value={locationName} onValueChange={setLocationName}>
-              <SelectTrigger className="h-8 border-gray-300">
+              <SelectTrigger className="w-full h-8 border-gray-300 text-xs">
                 <SelectValue placeholder="Select Location" />
               </SelectTrigger>
               <SelectContent>
@@ -460,21 +447,21 @@ export default function CreateGatePass() {
             </Select>
           </div>
 
-          <div className="grid grid-cols-[120px_1fr] items-center gap-2">
-            <Label className="font-semibold text-right">Driver NIC :</Label>
-            <div className="px-3 py-1 bg-gray-50 border border-gray-200 rounded min-h-[32px]">
+          <div className="grid grid-cols-[130px_1fr] items-center gap-2">
+            <Label className="font-semibold text-right text-xs">Driver NIC :</Label>
+            <div className="px-3 py-1 bg-gray-50 border border-gray-200 rounded min-h-[32px] flex items-center text-xs w-full">
               {selectedDriver?.nic || ""}
             </div>
           </div>
 
-          <div className="grid grid-cols-[120px_1fr] items-center gap-2 min-w-0">
-            <Label className="font-semibold text-right whitespace-nowrap">Customer:</Label>
-            <div className="truncate" title={selectedRows[0]?.name}>{selectedRows[0]?.name}</div>
+          <div className="grid grid-cols-[130px_1fr] items-center gap-2 min-w-0">
+            <Label className="font-semibold text-right text-xs whitespace-nowrap">Customer:</Label>
+            <div className="px-3 py-1 bg-gray-50 border border-gray-200 rounded min-h-[32px] flex items-center text-xs w-full truncate" title={selectedRows[0]?.name}>{selectedRows[0]?.name}</div>
           </div>
 
-          <div className="grid grid-cols-[120px_1fr] items-center gap-2">
-            <Label className="font-semibold text-right whitespace-nowrap">Seal Number :</Label>
-            <div>..............................................</div>
+          <div className="grid grid-cols-[130px_1fr] items-center gap-2">
+            <Label className="font-semibold text-right text-xs whitespace-nowrap">Seal Number :</Label>
+            <div className="px-3 py-1 border-b border-gray-300 min-h-[32px] flex items-center text-xs">..............................................</div>
           </div>
         </div>
 

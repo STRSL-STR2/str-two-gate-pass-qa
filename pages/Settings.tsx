@@ -16,9 +16,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { 
   Loader2, Plus, Trash2, Save, UploadCloud, AlertTriangle, Download, RotateCcw, 
   ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Search, RefreshCw, 
-  FileText, Undo2, Shield 
+  FileText, Undo2, Shield, Mail, KeyRound, UserPlus, Edit2, Eye, EyeOff, Lock, CheckCircle2, Copy
 } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { DEFAULT_EMAIL_SUBJECT, DEFAULT_EMAIL_BODY, openOutlookEmailComposer } from "@/lib/gatepass-actions";
 
 interface FileUploaderProps {
   label: string;
@@ -179,15 +180,41 @@ export default function Settings() {
   const [newLocation, setNewLocation] = useState("");
   const [newTimeSlot, setNewTimeSlot] = useState("");
   
-  // New user states
+  // User hierarchy helpers
+  const isSuperAdmin = profile?.role === 'super_admin';
+  const isAdmin = profile?.role === 'admin' || isSuperAdmin;
+
+  // Advanced User Management states
+  const [userSearch, setUserSearch] = useState("");
+  const [isAddUserOpen, setIsAddUserOpen] = useState(false);
   const [newUsername, setNewUsername] = useState("");
   const [newUserEmail, setNewUserEmail] = useState("");
   const [newUserPassword, setNewUserPassword] = useState("");
   const [newUserRole, setNewUserRole] = useState("user");
+  const [showAddUserPassword, setShowAddUserPassword] = useState(false);
+  const [isAddingUser, setIsAddingUser] = useState(false);
+
+  // Edit Role modal states
+  const [editRoleUser, setEditRoleUser] = useState<Profile | null>(null);
+  const [selectedEditRole, setSelectedEditRole] = useState("user");
+  const [isUpdatingRole, setIsUpdatingRole] = useState(false);
+
+  // Custom Reset Password modal states
+  const [resetPasswordUser, setResetPasswordUser] = useState<Profile | null>(null);
+  const [newResetPassword, setNewResetPassword] = useState("");
+  const [showResetPassword, setShowResetPassword] = useState(false);
+  const [isResettingPassword, setIsResettingPassword] = useState(false);
+
+  // Email Template states
+  const [emailSubject, setEmailSubject] = useState(() => {
+    return localStorage.getItem("gate_pass_email_subject") || DEFAULT_EMAIL_SUBJECT;
+  });
+  const [emailBody, setEmailBody] = useState(() => {
+    return localStorage.getItem("gate_pass_email_body") || DEFAULT_EMAIL_BODY;
+  });
+
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string, type: 'driver' | 'location' | 'timeSlot' | 'user' } | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [resetConfirm, setResetConfirm] = useState<{ id: string, username: string } | null>(null);
-  const [isResetting, setIsResetting] = useState(false);
 
   const fetchLogs = async () => {
     setLoadingLogs(true);
@@ -678,17 +705,42 @@ export default function Settings() {
     setDeleteConfirm({ id, type: 'timeSlot' });
   };
 
+  const filteredProfiles = useMemo(() => {
+    if (!userSearch.trim()) return profiles;
+    const q = userSearch.toLowerCase();
+    return profiles.filter(p => 
+      p.username.toLowerCase().includes(q) || 
+      (p.email || '').toLowerCase().includes(q) || 
+      (p.role || '').toLowerCase().includes(q)
+    );
+  }, [profiles, userSearch]);
+
+  const handleOpenAddUser = () => {
+    setNewUsername("");
+    setNewUserEmail("");
+    setNewUserPassword("");
+    setNewUserRole("user");
+    setShowAddUserPassword(false);
+    setIsAddUserOpen(true);
+  };
+
   const handleAddUser = async () => {
-    if (!newUsername || !newUserPassword) {
-      toast.error("Username and Password are required");
+    if (!newUsername.trim() || !newUserPassword) {
+      toast.error("Username and Password are required.");
       return;
     }
     if (newUserPassword.length < 6) {
       toast.error("Password must be at least 6 characters.");
       return;
     }
+    if (newUserRole === 'super_admin' && !isSuperAdmin) {
+      toast.error("Only Super Admins can assign the Super Admin role.");
+      return;
+    }
+
+    setIsAddingUser(true);
     try {
-      const { data, error } = await supabase.rpc('admin_create_user', {
+      const { error } = await supabase.rpc('admin_create_user', {
         p_username: newUsername.trim(),
         p_email: newUserEmail.trim() || null,
         p_password: newUserPassword,
@@ -705,17 +757,136 @@ export default function Settings() {
         performed_by: profile?.username || 'Admin'
       });
 
-      toast.success("User created successfully.");
+      toast.success(`User '${newUsername.trim()}' created successfully.`);
+      setIsAddUserOpen(false);
       setNewUsername("");
       setNewUserEmail("");
       setNewUserPassword("");
       fetchData();
     } catch (err: any) {
-      toast.error(err.message || "Failed to add user");
+      toast.error(err.message || "Failed to create user.");
+    } finally {
+      setIsAddingUser(false);
+    }
+  };
+
+  const handleOpenEditRole = (target: Profile) => {
+    if (target.role === 'super_admin' && !isSuperAdmin) {
+      toast.error("Standard Admins cannot edit Super Admin accounts.");
+      return;
+    }
+    setEditRoleUser(target);
+    setSelectedEditRole(target.role || 'user');
+  };
+
+  const handleUpdateRole = async () => {
+    if (!editRoleUser) return;
+    if (editRoleUser.role === 'super_admin' && !isSuperAdmin) {
+      toast.error("Standard Admins cannot modify Super Admin accounts.");
+      return;
+    }
+    if (selectedEditRole === 'super_admin' && !isSuperAdmin) {
+      toast.error("Only a Super Admin can promote a user to Super Admin.");
+      return;
+    }
+
+    setIsUpdatingRole(true);
+    try {
+      const { error: rpcErr } = await supabase.rpc('admin_update_user_role', {
+        p_user_id: editRoleUser.id,
+        p_new_role: selectedEditRole
+      });
+
+      if (rpcErr) {
+        // Fallback to direct table update
+        const { error: tblErr } = await supabase
+          .from('app_users')
+          .update({ role: selectedEditRole })
+          .eq('id', editRoleUser.id);
+        if (tblErr) throw tblErr;
+      }
+
+      await logAuditActivity({
+        action: 'USER_ROLE_UPDATED',
+        entity_type: 'user',
+        entity_id: editRoleUser.username,
+        details: { previous_role: editRoleUser.role, new_role: selectedEditRole },
+        performed_by: profile?.username || 'Admin'
+      });
+
+      toast.success(`Role for ${editRoleUser.username} updated to ${selectedEditRole}.`);
+      setProfiles(prev => prev.map(p => p.id === editRoleUser.id ? { ...p, role: selectedEditRole } : p));
+      setEditRoleUser(null);
+    } catch (err: any) {
+      toast.error("Failed to update role: " + (err.message || "Unknown error"));
+    } finally {
+      setIsUpdatingRole(false);
+    }
+  };
+
+  const handleOpenResetPassword = (target: Profile) => {
+    if (target.role === 'super_admin' && !isSuperAdmin) {
+      toast.error("Standard Admins cannot reset passwords for Super Admin accounts.");
+      return;
+    }
+    setResetPasswordUser(target);
+    setNewResetPassword("");
+    setShowResetPassword(false);
+  };
+
+  const handleConfirmResetPassword = async () => {
+    if (!resetPasswordUser) return;
+    if (resetPasswordUser.role === 'super_admin' && !isSuperAdmin) {
+      toast.error("Standard Admins cannot reset passwords for Super Admin accounts.");
+      return;
+    }
+    if (!newResetPassword || newResetPassword.length < 6) {
+      toast.error("New password must be at least 6 characters.");
+      return;
+    }
+
+    setIsResettingPassword(true);
+    try {
+      const { error: rpcErr } = await supabase.rpc('admin_reset_user_password', {
+        p_user_id: resetPasswordUser.id,
+        p_new_password: newResetPassword
+      });
+
+      if (rpcErr) throw rpcErr;
+
+      await logAuditActivity({
+        action: 'USER_PASSWORD_RESET',
+        entity_type: 'user',
+        entity_id: resetPasswordUser.username,
+        details: { reset_type: 'custom_password' },
+        performed_by: profile?.username || 'Admin'
+      });
+
+      toast.success(`Password for ${resetPasswordUser.username} has been reset successfully.`);
+      setResetPasswordUser(null);
+      setNewResetPassword("");
+    } catch (err: any) {
+      toast.error("Failed to reset password: " + (err.message || "Unknown error"));
+    } finally {
+      setIsResettingPassword(false);
     }
   };
 
   const handleDeleteUser = (id: string) => {
+    const targetUser = profiles.find(p => p.id === id);
+    if (!targetUser) return;
+    if (targetUser.id === profile?.id) {
+      toast.error("You cannot delete your own account.");
+      return;
+    }
+    if (targetUser.username === 'admin') {
+      toast.error("The primary system administrator account cannot be deleted.");
+      return;
+    }
+    if (targetUser.role === 'super_admin' && !isSuperAdmin) {
+      toast.error("Standard Admins cannot delete Super Admin accounts.");
+      return;
+    }
     setDeleteConfirm({ id, type: 'user' });
   };
 
@@ -739,6 +910,10 @@ export default function Settings() {
         toast.success("Time slot deleted");
       } else if (type === 'user') {
         const targetUser = profiles.find(p => p.id === id);
+        if (targetUser?.role === 'super_admin' && !isSuperAdmin) {
+          toast.error("Standard Admins cannot delete Super Admin accounts.");
+          return;
+        }
         const { error: rpcErr } = await supabase.rpc('admin_delete_user', { p_user_id: id });
         if (rpcErr) {
           const { error } = await supabase.from('app_users').delete().eq('id', id);
@@ -764,32 +939,36 @@ export default function Settings() {
     }
   };
 
-  const confirmResetPassword = async () => {
-    if (!resetConfirm) return;
-    setIsResetting(true);
-    try {
-      const { error: rpcErr } = await supabase.rpc('admin_reset_user_password', {
-        p_user_id: resetConfirm.id,
-        p_new_password: 'password123'
-      });
+  const handleSaveEmailTemplate = () => {
+    localStorage.setItem("gate_pass_email_subject", emailSubject);
+    localStorage.setItem("gate_pass_email_body", emailBody);
+    toast.success("Gate pass email template saved successfully.");
+  };
 
-      if (rpcErr) throw rpcErr;
-      
-      await logAuditActivity({
-        action: 'USER_PASSWORD_RESET',
-        entity_type: 'user',
-        entity_id: resetConfirm.username,
-        details: { reset_to_default: true },
-        performed_by: profile?.username || 'Admin'
-      });
+  const handleResetEmailTemplate = () => {
+    setEmailSubject(DEFAULT_EMAIL_SUBJECT);
+    setEmailBody(DEFAULT_EMAIL_BODY);
+    localStorage.setItem("gate_pass_email_subject", DEFAULT_EMAIL_SUBJECT);
+    localStorage.setItem("gate_pass_email_body", DEFAULT_EMAIL_BODY);
+    toast.success("Email template reset to default settings.");
+  };
 
-      toast.success(`Password for ${resetConfirm.username} reset to 'password123'`);
-      setResetConfirm(null);
-    } catch (err: any) {
-      toast.error("Failed to reset password: " + (err.message || "Unknown error"));
-    } finally {
-      setIsResetting(false);
-    }
+  const handleTestEmailInOutlook = () => {
+    openOutlookEmailComposer({
+      gate_pass_no: "STR2GP-26-JAN-0001",
+      date: format(new Date(), "yyyy-MM-dd"),
+      time: "08:00 AM - 10:00 AM",
+      location: "Colombo Logistics Center",
+      vehicle_number: "WP-CAB-1234",
+      driver_name: "Kamal Perera",
+      phone_number: "0771234567",
+      nic: "851234567V",
+      customer_name: "Brandix Apparel Solutions",
+      total_cartons: 45,
+      total_mtrs: 1250,
+      total_value: 3840.50,
+      invoice_count: 3
+    });
   };
 
   if (loading) {
@@ -806,6 +985,7 @@ export default function Settings() {
             { id: "locations", label: "Locations" },
             { id: "times", label: "Time Slots" },
             { id: "users", label: "System Users" },
+            { id: "email", label: "Email Template" },
             { id: "logs", label: "Activity Logs" },
             { id: "backup", label: "System Backup" }
           ].map(tab => (
@@ -934,14 +1114,14 @@ export default function Settings() {
                   </Button>
                 </div>
               </div>
-              <div className="flex-1 w-full overflow-y-auto">
-                <Table>
-                  <TableHeader className="bg-slate-50 dark:bg-slate-900 sticky top-0 z-10">
+              <div className="flex-1 w-full overflow-auto">
+                <Table className="min-w-[600px]">
+                  <TableHeader className="bg-slate-100 dark:bg-slate-800 sticky top-0 z-10 shadow-xs border-b border-slate-200 dark:border-slate-700">
                     <TableRow className="hover:bg-transparent">
-                      <TableHead className="font-medium text-slate-600 dark:text-slate-400">Driver Name</TableHead>
-                      <TableHead className="font-medium text-slate-600 dark:text-slate-400">Vehicle No</TableHead>
-                      <TableHead className="font-medium text-slate-600 dark:text-slate-400">Phone</TableHead>
-                      <TableHead className="font-medium text-slate-600 dark:text-slate-400">NIC</TableHead>
+                      <TableHead className="font-semibold text-slate-700 dark:text-slate-200 text-xs">Driver Name</TableHead>
+                      <TableHead className="font-semibold text-slate-700 dark:text-slate-200 text-xs">Vehicle No</TableHead>
+                      <TableHead className="font-semibold text-slate-700 dark:text-slate-200 text-xs">Phone</TableHead>
+                      <TableHead className="font-semibold text-slate-700 dark:text-slate-200 text-xs">NIC</TableHead>
                       <TableHead className="w-12"></TableHead>
                     </TableRow>
                   </TableHeader>
@@ -987,11 +1167,11 @@ export default function Settings() {
               </div>
             </div>
             <CardContent className="p-0 flex flex-col flex-1 overflow-hidden">
-              <div className="flex-1 w-full overflow-y-auto relative">
-                <Table>
-                  <TableHeader className="bg-slate-50 dark:bg-slate-900 sticky top-0 z-10">
+              <div className="flex-1 w-full overflow-auto relative">
+                <Table className="min-w-[400px]">
+                  <TableHeader className="bg-slate-100 dark:bg-slate-800 sticky top-0 z-10 shadow-xs border-b border-slate-200 dark:border-slate-700">
                     <TableRow className="hover:bg-transparent">
-                      <TableHead className="font-medium text-slate-600 dark:text-slate-400">Location Details</TableHead>
+                      <TableHead className="font-semibold text-slate-700 dark:text-slate-200 text-xs">Location Details</TableHead>
                       <TableHead className="w-12"></TableHead>
                     </TableRow>
                   </TableHeader>
@@ -1034,11 +1214,11 @@ export default function Settings() {
               </div>
             </div>
             <CardContent className="p-0 flex flex-col flex-1 overflow-hidden">
-              <div className="flex-1 w-full overflow-y-auto relative">
-                <Table>
-                  <TableHeader className="bg-slate-50 dark:bg-slate-900 sticky top-0 z-10">
+              <div className="flex-1 w-full overflow-auto relative">
+                <Table className="min-w-[400px]">
+                  <TableHeader className="bg-slate-100 dark:bg-slate-800 sticky top-0 z-10 shadow-xs border-b border-slate-200 dark:border-slate-700">
                     <TableRow className="hover:bg-transparent">
-                      <TableHead className="font-medium text-slate-600 dark:text-slate-400">Time Slot</TableHead>
+                      <TableHead className="font-semibold text-slate-700 dark:text-slate-200 text-xs">Time Slot</TableHead>
                       <TableHead className="w-12"></TableHead>
                     </TableRow>
                   </TableHeader>
@@ -1069,121 +1249,301 @@ export default function Settings() {
         {/* Users */}
         {activeTab === "users" && (<div className="flex flex-col h-full">
           <Card className="border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden flex flex-col h-full">
-            <div className="px-4 py-2 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/20 shrink-0 flex items-center justify-between">
+            <div className="px-4 py-2.5 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/20 shrink-0 flex flex-col sm:flex-row gap-3 items-start sm:items-center justify-between">
               <div>
-                <CardTitle className="text-sm font-semibold">System Users</CardTitle>
-                <CardDescription className="text-xs text-slate-500">Create accounts and manage access rules.</CardDescription>
+                <CardTitle className="text-sm font-semibold flex items-center gap-1.5">
+                  System Users
+                </CardTitle>
+                <CardDescription className="text-xs text-slate-500">
+                  Manage login accounts, assign roles, and handle password credentials.
+                </CardDescription>
               </div>
-              <div className="text-xs font-medium text-slate-500 bg-slate-100 dark:bg-slate-800 px-2.5 py-0.5 rounded-full">
-                {profiles.length} Users
+              <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-end">
+                <div className="relative min-w-[140px] max-w-[200px] flex-1 sm:flex-initial">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                  <Input 
+                    value={userSearch} 
+                    onChange={e => setUserSearch(e.target.value)} 
+                    placeholder="Search users..."
+                    className="h-8 pl-8 text-xs bg-white dark:bg-slate-950 w-full"
+                  />
+                </div>
+                <div className="text-xs font-medium text-slate-500 bg-slate-100 dark:bg-slate-800 px-2.5 py-1 rounded-full whitespace-nowrap">
+                  {filteredProfiles.length} Users
+                </div>
+                {isAdmin && (
+                  <Button 
+                    onClick={handleOpenAddUser} 
+                    size="sm" 
+                    className="bg-slate-900 text-white hover:bg-slate-800 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200 h-8 text-xs px-3 shadow-xs shrink-0"
+                  >
+                    <UserPlus className="mr-1.5 h-3.5 w-3.5" /> Add User
+                  </Button>
+                )}
               </div>
             </div>
             <CardContent className="p-0 flex flex-col flex-1 overflow-hidden">
-              <div className="px-4 py-2 shrink-0 border-b border-slate-100 dark:border-slate-800 bg-slate-50/30 dark:bg-slate-900/30">
-                <div className="flex flex-col md:flex-row gap-2 items-end">
-                  <div className="grid gap-1 flex-1 w-full">
-                    <Label className="text-[11px] font-medium text-slate-500">Username *</Label>
-                    <Input 
-                      value={newUsername} 
-                      onChange={e => setNewUsername(e.target.value.replace(/\s/g, ''))} 
-                      placeholder="john_doe"
-                      className="h-8 text-xs bg-white dark:bg-slate-950"
-                    />
-                  </div>
-                  <div className="grid gap-1 flex-1 w-full">
-                    <Label className="text-[11px] font-medium text-slate-500">Email Address</Label>
-                    <Input 
-                      type="email"
-                      value={newUserEmail} 
-                      onChange={e => setNewUserEmail(e.target.value)} 
-                      placeholder="Optional (johndoe@example.com)"
-                      className="h-8 text-xs bg-white dark:bg-slate-950"
-                    />
-                  </div>
-                  <div className="grid gap-1 flex-1 w-full">
-                    <Label className="text-[11px] font-medium text-slate-500">Password *</Label>
-                    <Input 
-                      type="password"
-                      value={newUserPassword} 
-                      onChange={e => setNewUserPassword(e.target.value)}
-                      placeholder="Min 6 chars"
-                      className="h-8 text-xs bg-white dark:bg-slate-950"
-                    />
-                  </div>
-                  <div className="grid gap-1 w-full md:w-32">
-                    <Label className="text-[11px] font-medium text-slate-500">Role</Label>
-                    <select 
-                      className="flex h-8 w-full rounded-md border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950 px-2.5 py-0 text-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500"
-                      value={newUserRole}
-                      onChange={e => setNewUserRole(e.target.value)}
-                    >
-                      <option value="user">User</option>
-                      <option value="admin">Admin</option>
-                      <option value="super_admin">Super Admin</option>
-                      <option value="viewer">Viewer</option>
-                    </select>
-                  </div>
-                  <Button onClick={handleAddUser} size="sm" className="bg-slate-900 text-white hover:bg-slate-800 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200 h-8 text-xs px-3 w-full md:w-auto shrink-0">
-                    <Plus className="mr-1 h-3.5 w-3.5" /> Add User
-                  </Button>
-                </div>
-              </div>
-              <div className="flex-1 overflow-y-auto">
-                <Table>
-                  <TableHeader className="bg-slate-50 dark:bg-slate-900 sticky top-0 z-10">
+              <div className="flex-1 w-full overflow-auto">
+                <Table className="min-w-[750px]">
+                  <TableHeader className="bg-slate-100 dark:bg-slate-800 sticky top-0 z-10 shadow-xs border-b border-slate-200 dark:border-slate-700">
                     <TableRow className="hover:bg-transparent">
-                      <TableHead className="font-medium text-slate-600 dark:text-slate-400">Username</TableHead>
-                      <TableHead className="font-medium text-slate-600 dark:text-slate-400">Email</TableHead>
-                      <TableHead className="font-medium text-slate-600 dark:text-slate-400">Account Role</TableHead>
-                      <TableHead className="font-medium text-slate-600 dark:text-slate-400">Password</TableHead>
-                      <TableHead className="font-medium text-slate-600 dark:text-slate-400">Status</TableHead>
-                      <TableHead className="font-medium text-slate-600 dark:text-slate-400">Joined</TableHead>
-                      <TableHead className="w-10"></TableHead>
+                      <TableHead className="font-semibold text-slate-700 dark:text-slate-200 text-xs">Username</TableHead>
+                      <TableHead className="font-semibold text-slate-700 dark:text-slate-200 text-xs">Email</TableHead>
+                      <TableHead className="font-semibold text-slate-700 dark:text-slate-200 text-xs">Account Role</TableHead>
+                      <TableHead className="font-semibold text-slate-700 dark:text-slate-200 text-xs">Status</TableHead>
+                      <TableHead className="font-semibold text-slate-700 dark:text-slate-200 text-xs">Joined</TableHead>
+                      <TableHead className="font-semibold text-slate-700 dark:text-slate-200 text-xs text-right pr-4">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {profiles.map(p => (
-                      <TableRow key={p.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-900/50">
-                        <TableCell className="font-medium">{p.username}</TableCell>
-                        <TableCell className="text-slate-500">{p.email || '-'}</TableCell>
-                        <TableCell>
-                          <span className={`px-2.5 py-1 rounded-full text-xs font-medium border ${
-                            p.role === 'super_admin'
-                              ? 'bg-purple-50 border-purple-200 text-purple-700 dark:bg-purple-950/40 dark:border-purple-800 dark:text-purple-300'
-                              : p.role === 'admin'
-                                ? 'bg-indigo-50 border-indigo-200 text-indigo-700 dark:bg-indigo-950/40 dark:border-indigo-800 dark:text-indigo-300'
-                                : 'bg-slate-100 border-slate-200 text-slate-600 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300 capitalize'
-                          }`}>
-                            {p.role === 'super_admin' ? 'Super Admin' : p.role}
-                          </span>
-                        </TableCell>
-                        <TableCell>
-                          <Button variant="outline" size="sm" onClick={() => setResetConfirm({ id: p.id, username: p.username })}>
-                            Reset Password
-                          </Button>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-1.5">
-                            <div className={`h-1.5 w-1.5 rounded-full ${p.is_active ? 'bg-emerald-500' : 'bg-red-500'}`} />
-                            <span className="text-sm text-slate-600 dark:text-slate-400">{p.is_active ? 'Active' : 'Disabled'}</span>
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-slate-500 text-sm">{new Date(p.created_at || new Date()).toLocaleDateString()}</TableCell>
-                        <TableCell>
-                          {p.username !== 'admin' && (
-                            <Button variant="ghost" size="icon" onClick={() => handleDeleteUser(p.id)} className="h-8 w-8 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/50">
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          )}
+                    {filteredProfiles.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={6} className="text-center text-slate-500 py-8">
+                          No users found matching your search.
                         </TableCell>
                       </TableRow>
-                    ))}
+                    ) : (
+                      filteredProfiles.map(p => {
+                        const isTargetSuperAdmin = p.role === 'super_admin';
+                        const canManageUser = isSuperAdmin || (!isTargetSuperAdmin && isAdmin);
+
+                        return (
+                          <TableRow key={p.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-900/50">
+                            <TableCell className="font-medium">
+                              <div className="flex items-center gap-1.5">
+                                <span>{p.username}</span>
+                                {isTargetSuperAdmin && (
+                                  <span title="Super Admin Account"><Shield className="h-3.5 w-3.5 text-purple-600" /></span>
+                                )}
+                              </div>
+                            </TableCell>
+                            <TableCell className="text-slate-500">{p.email || '-'}</TableCell>
+                            <TableCell>
+                              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${
+                                p.role === 'super_admin'
+                                  ? 'bg-purple-50 border-purple-200 text-purple-700 dark:bg-purple-950/40 dark:border-purple-800 dark:text-purple-300'
+                                  : p.role === 'admin'
+                                    ? 'bg-indigo-50 border-indigo-200 text-indigo-700 dark:bg-indigo-950/40 dark:border-indigo-800 dark:text-indigo-300'
+                                    : p.role === 'viewer'
+                                      ? 'bg-amber-50 border-amber-200 text-amber-700 dark:bg-amber-950/40 dark:border-amber-800 dark:text-amber-300'
+                                      : 'bg-slate-100 border-slate-200 text-slate-600 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300 capitalize'
+                              }`}>
+                                {p.role === 'super_admin' ? 'Super Admin' : p.role === 'viewer' ? 'Viewer' : p.role === 'admin' ? 'Admin' : 'User'}
+                              </span>
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-1.5">
+                                <div className={`h-1.5 w-1.5 rounded-full ${p.is_active ? 'bg-emerald-500' : 'bg-red-500'}`} />
+                                <span className="text-xs text-slate-600 dark:text-slate-400">{p.is_active ? 'Active' : 'Disabled'}</span>
+                              </div>
+                            </TableCell>
+                            <TableCell className="text-slate-500 text-xs">{new Date(p.created_at || new Date()).toLocaleDateString()}</TableCell>
+                            <TableCell className="text-right pr-4">
+                              <div className="flex items-center justify-end gap-1.5">
+                                {!canManageUser ? (
+                                  <span className="inline-flex items-center text-[11px] text-purple-700 dark:text-purple-400 bg-purple-50 dark:bg-purple-950/30 px-2 py-0.5 rounded border border-purple-200 dark:border-purple-800 font-medium">
+                                    <Lock className="h-3 w-3 mr-1" /> Protected
+                                  </span>
+                                ) : (
+                                  <>
+                                    <Button 
+                                      variant="outline" 
+                                      size="sm" 
+                                      onClick={() => handleOpenEditRole(p)} 
+                                      className="h-7 text-xs px-2"
+                                      title="Change User Role"
+                                    >
+                                      <Edit2 className="h-3 w-3 mr-1" /> Role
+                                    </Button>
+                                    <Button 
+                                      variant="outline" 
+                                      size="sm" 
+                                      onClick={() => handleOpenResetPassword(p)} 
+                                      className="h-7 text-xs px-2 text-amber-700 dark:text-amber-400 border-amber-300 dark:border-amber-800 hover:bg-amber-50 dark:hover:bg-amber-950/30"
+                                      title="Reset Password"
+                                    >
+                                      <KeyRound className="h-3 w-3 mr-1" /> Reset PW
+                                    </Button>
+                                    {p.username !== 'admin' && p.id !== profile?.id && (
+                                      <Button 
+                                        variant="ghost" 
+                                        size="icon" 
+                                        onClick={() => handleDeleteUser(p.id)} 
+                                        className="h-7 w-7 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/50"
+                                        title="Delete User"
+                                      >
+                                        <Trash2 className="h-3.5 w-3.5" />
+                                      </Button>
+                                    )}
+                                  </>
+                                )}
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })
+                    )}
                   </TableBody>
                 </Table>
               </div>
             </CardContent>
           </Card>
         </div>)}
+
+        {/* Email Template Tab */}
+        {activeTab === "email" && (
+          <div className="h-full overflow-y-auto pb-8 pr-2">
+            <Card className="border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
+              <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/20 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+                <div>
+                  <CardTitle className="text-base font-semibold flex items-center gap-2">
+                    <Mail className="h-4 w-4 text-blue-600" /> Gate Pass Email Template
+                  </CardTitle>
+                  <CardDescription className="text-xs mt-0.5">
+                    Customize the subject line and body format used when opening Outlook Classic / system email for gate pass dispatch advice.
+                  </CardDescription>
+                </div>
+                <div className="flex items-center gap-2 self-end sm:self-auto">
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={handleTestEmailInOutlook}
+                    className="h-8 text-xs border-blue-200 text-blue-700 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/30"
+                    title="Open Outlook with sample gate pass data"
+                  >
+                    <Mail className="mr-1.5 h-3.5 w-3.5 text-blue-600" /> Test in Outlook
+                  </Button>
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={handleResetEmailTemplate}
+                    className="h-8 text-xs text-slate-600 dark:text-slate-300"
+                  >
+                    <RotateCcw className="mr-1.5 h-3.5 w-3.5" /> Reset Default
+                  </Button>
+                </div>
+              </div>
+
+              <CardContent className="p-6 space-y-6">
+                {/* Subject Field */}
+                <div className="space-y-2">
+                  <Label className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+                    Email Subject Template
+                  </Label>
+                  <Input 
+                    value={emailSubject}
+                    onChange={e => setEmailSubject(e.target.value)}
+                    className="bg-white dark:bg-slate-900 h-10 w-full font-mono text-xs"
+                    placeholder="Gate Pass Dispatch Advice - {gate_pass_no} - {customer_name}"
+                  />
+                </div>
+
+                {/* Body Field */}
+                <div className="space-y-2">
+                  <Label className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+                    Email Body Template
+                  </Label>
+                  <textarea 
+                    rows={12}
+                    value={emailBody}
+                    onChange={e => setEmailBody(e.target.value)}
+                    className="flex w-full rounded-md border border-slate-200 bg-white px-3 py-2.5 text-xs font-mono ring-offset-white placeholder:text-slate-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-950 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-800 dark:bg-slate-900 dark:ring-offset-slate-950 dark:placeholder:text-slate-400 dark:focus-visible:ring-slate-300"
+                    placeholder="Enter email body template with dynamic placeholders..."
+                  />
+                </div>
+
+                {/* Available Placeholders Badges */}
+                <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs font-semibold text-slate-600 dark:text-slate-400">
+                      Available Dynamic Placeholders (Click to Copy):
+                    </Label>
+                    <span className="text-[11px] text-muted-foreground">Will be auto-replaced with gate pass record values</span>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {[
+                      { code: "{gate_pass_no}", desc: "Gate Pass #" },
+                      { code: "{customer_name}", desc: "Customer" },
+                      { code: "{date}", desc: "Date" },
+                      { code: "{time}", desc: "Time Slot" },
+                      { code: "{location}", desc: "Location" },
+                      { code: "{vehicle_number}", desc: "Vehicle #" },
+                      { code: "{driver_name}", desc: "Driver" },
+                      { code: "{phone_number}", desc: "Driver Phone" },
+                      { code: "{nic}", desc: "Driver NIC" },
+                      { code: "{total_cartons}", desc: "Cartons" },
+                      { code: "{total_mtrs}", desc: "Meters" },
+                      { code: "{total_value}", desc: "Value ($)" },
+                      { code: "{invoice_count}", desc: "Invoices #" }
+                    ].map(p => (
+                      <button
+                        key={p.code}
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText(p.code);
+                          toast.success(`Copied placeholder ${p.code}`);
+                        }}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-slate-100 dark:bg-slate-800 hover:bg-blue-50 hover:text-blue-700 dark:hover:bg-blue-950/40 text-[11px] font-mono text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 transition-colors"
+                        title={`Click to copy: ${p.desc}`}
+                      >
+                        <Copy className="h-2.5 w-2.5 text-muted-foreground" />
+                        <span>{p.code}</span>
+                        <span className="text-slate-400 dark:text-slate-500 font-sans text-[10px]">({p.desc})</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Live Preview */}
+                <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                  <Label className="text-xs font-semibold text-slate-600 dark:text-slate-400">
+                    Live Preview (Sample Dispatch Advice):
+                  </Label>
+                  <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/50 p-4 space-y-2 text-xs font-mono">
+                    <div className="font-semibold text-slate-800 dark:text-slate-200 border-b border-slate-200 dark:border-slate-800 pb-2">
+                      Subject: {emailSubject
+                        .replace(/{gate_pass_no}/g, "STR2GP-26-JAN-0001")
+                        .replace(/{customer_name}/g, "Brandix Apparel Solutions")
+                        .replace(/{date}/g, format(new Date(), "yyyy-MM-dd"))
+                        .replace(/{time}/g, "08:00 AM - 10:00 AM")
+                        .replace(/{location}/g, "Colombo Logistics Center")
+                        .replace(/{vehicle_number}/g, "WP-CAB-1234")
+                        .replace(/{driver_name}/g, "Kamal Perera")
+                        .replace(/{total_cartons}/g, "45")
+                      }
+                    </div>
+                    <pre className="whitespace-pre-wrap text-slate-600 dark:text-slate-400 leading-relaxed font-mono text-[11px]">
+                      {emailBody
+                        .replace(/{gate_pass_no}/g, "STR2GP-26-JAN-0001")
+                        .replace(/{customer_name}/g, "Brandix Apparel Solutions")
+                        .replace(/{date}/g, format(new Date(), "yyyy-MM-dd"))
+                        .replace(/{time}/g, "08:00 AM - 10:00 AM")
+                        .replace(/{location}/g, "Colombo Logistics Center")
+                        .replace(/{vehicle_number}/g, "WP-CAB-1234")
+                        .replace(/{driver_name}/g, "Kamal Perera")
+                        .replace(/{phone_number}/g, "0771234567")
+                        .replace(/{nic}/g, "851234567V")
+                        .replace(/{total_cartons}/g, "45")
+                        .replace(/{total_mtrs}/g, "1250")
+                        .replace(/{total_value}/g, "3840.50")
+                        .replace(/{invoice_count}/g, "3")
+                      }
+                    </pre>
+                  </div>
+                </div>
+              </CardContent>
+
+              <CardFooter className="bg-slate-50 dark:bg-slate-900/50 border-t border-slate-100 dark:border-slate-800 p-4">
+                <Button 
+                  onClick={handleSaveEmailTemplate} 
+                  className="bg-slate-900 text-white hover:bg-slate-800 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
+                >
+                  <Save className="mr-2 h-4 w-4" /> Save Email Template
+                </Button>
+              </CardFooter>
+            </Card>
+          </div>
+        )}
 
         {/* Activity & Audit Logs */}
         {activeTab === "logs" && (
@@ -1307,13 +1667,13 @@ export default function Settings() {
               <CardContent className="p-0 flex flex-col flex-1 overflow-hidden min-h-0">
                 <div className="flex-1 w-full overflow-auto relative">
                   <Table className="min-w-[900px]">
-                    <TableHeader className="bg-slate-100 dark:bg-slate-900 sticky top-0 z-10">
+                    <TableHeader className="bg-slate-100 dark:bg-slate-800 sticky top-0 z-10 shadow-xs border-b border-slate-200 dark:border-slate-700">
                       <TableRow className="hover:bg-transparent">
-                        <TableHead className="w-40 font-medium text-slate-600 dark:text-slate-400 text-xs">Date & Time</TableHead>
-                        <TableHead className="w-32 font-medium text-slate-600 dark:text-slate-400 text-xs">Performed By</TableHead>
-                        <TableHead className="w-44 font-medium text-slate-600 dark:text-slate-400 text-xs">Action</TableHead>
-                        <TableHead className="w-40 font-medium text-slate-600 dark:text-slate-400 text-xs">Target / Ref</TableHead>
-                        <TableHead className="font-medium text-slate-600 dark:text-slate-400 text-xs">Event Details & Reason</TableHead>
+                        <TableHead className="w-40 font-semibold text-slate-700 dark:text-slate-200 text-xs">Date & Time</TableHead>
+                        <TableHead className="w-32 font-semibold text-slate-700 dark:text-slate-200 text-xs">Performed By</TableHead>
+                        <TableHead className="w-44 font-semibold text-slate-700 dark:text-slate-200 text-xs">Action</TableHead>
+                        <TableHead className="w-40 font-semibold text-slate-700 dark:text-slate-200 text-xs">Target / Ref</TableHead>
+                        <TableHead className="font-semibold text-slate-700 dark:text-slate-200 text-xs">Event Details & Reason</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -1504,29 +1864,207 @@ export default function Settings() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={!!resetConfirm} onOpenChange={(open) => !open && !isResetting && setResetConfirm(null)}>
-        <DialogContent>
+      {/* Add User Modal */}
+      <Dialog open={isAddUserOpen} onOpenChange={(open) => !open && !isAddingUser && setIsAddUserOpen(false)}>
+        <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle className="flex items-center text-amber-600 dark:text-amber-500">
-              <AlertTriangle className="h-5 w-5 mr-2" /> Reset User Password
+            <DialogTitle className="flex items-center gap-2">
+              <UserPlus className="h-5 w-5 text-blue-600" /> Create System User
             </DialogTitle>
-            <DialogDescription className="pt-2 text-slate-600 dark:text-slate-400 space-y-2">
-              <span className="block text-sm">
-                Are you sure you want to reset the password for account <strong className="text-slate-900 dark:text-white font-semibold">{resetConfirm?.username}</strong>?
-              </span>
-              <div className="bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 p-3 rounded-md text-xs text-amber-900 dark:text-amber-200">
-                The password will be reset to default: <strong className="font-mono bg-amber-100 dark:bg-amber-900/60 px-1.5 py-0.5 rounded text-amber-950 dark:text-amber-100">password123</strong>
-              </div>
+            <DialogDescription>
+              Add a new login account with specific access privileges.
             </DialogDescription>
           </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold">Username *</Label>
+              <Input 
+                value={newUsername}
+                onChange={e => setNewUsername(e.target.value.replace(/\s/g, ''))}
+                placeholder="e.g. john_doe"
+                className="h-9 text-xs"
+              />
+              <span className="text-[10px] text-muted-foreground">Spaces are automatically removed</span>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold">Email Address (Optional)</Label>
+              <Input 
+                type="email"
+                value={newUserEmail}
+                onChange={e => setNewUserEmail(e.target.value)}
+                placeholder="e.g. john@example.com"
+                className="h-9 text-xs"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold">Initial Password *</Label>
+              <div className="relative">
+                <Input 
+                  type={showAddUserPassword ? "text" : "password"}
+                  value={newUserPassword}
+                  onChange={e => setNewUserPassword(e.target.value)}
+                  placeholder="Minimum 6 characters"
+                  className="h-9 text-xs pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowAddUserPassword(!showAddUserPassword)}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                >
+                  {showAddUserPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold">Account Role *</Label>
+              <select
+                value={newUserRole}
+                onChange={e => setNewUserRole(e.target.value)}
+                className="flex h-9 w-full rounded-md border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950 px-3 py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500"
+              >
+                <option value="user">User (Standard Operations)</option>
+                <option value="viewer">Viewer (Read-only Records)</option>
+                <option value="admin">Admin (System Administrator)</option>
+                {isSuperAdmin && (
+                  <option value="super_admin">Super Admin (Unrestricted Full Access)</option>
+                )}
+              </select>
+              {!isSuperAdmin && (
+                <span className="text-[10px] text-slate-500">Note: Only Super Admins can assign the Super Admin role.</span>
+              )}
+            </div>
+          </div>
+
           <DialogFooter>
-            <Button variant="outline" onClick={() => setResetConfirm(null)} disabled={isResetting}>Cancel</Button>
+            <Button variant="outline" onClick={() => setIsAddUserOpen(false)} disabled={isAddingUser}>
+              Cancel
+            </Button>
+            <Button onClick={handleAddUser} disabled={isAddingUser} className="bg-slate-900 text-white hover:bg-slate-800 dark:bg-white dark:text-slate-900">
+              {isAddingUser ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UserPlus className="mr-2 h-4 w-4" />}
+              Create Account
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Role Modal */}
+      <Dialog open={!!editRoleUser} onOpenChange={(open) => !open && !isUpdatingRole && setEditRoleUser(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Edit2 className="h-5 w-5 text-indigo-600" /> Edit User Role
+            </DialogTitle>
+            <DialogDescription>
+              Update system permission role for account <strong className="text-foreground">{editRoleUser?.username}</strong>.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <div className="bg-slate-50 dark:bg-slate-900/60 p-3 rounded-md border border-slate-200 dark:border-slate-800 text-xs space-y-1">
+              <div><strong>Username:</strong> {editRoleUser?.username}</div>
+              <div><strong>Current Role:</strong> <span className="capitalize">{editRoleUser?.role}</span></div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold">Select New Role</Label>
+              <select
+                value={selectedEditRole}
+                onChange={e => setSelectedEditRole(e.target.value)}
+                className="flex h-9 w-full rounded-md border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950 px-3 py-1 text-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-blue-500"
+              >
+                <option value="user">User (Standard Operations)</option>
+                <option value="viewer">Viewer (Read-only Records)</option>
+                <option value="admin">Admin (System Administrator)</option>
+                {isSuperAdmin && (
+                  <option value="super_admin">Super Admin (Unrestricted Full Access)</option>
+                )}
+              </select>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditRoleUser(null)} disabled={isUpdatingRole}>
+              Cancel
+            </Button>
+            <Button onClick={handleUpdateRole} disabled={isUpdatingRole} className="bg-indigo-600 hover:bg-indigo-700 text-white">
+              {isUpdatingRole ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+              Save Changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reset Password Modal */}
+      <Dialog open={!!resetPasswordUser} onOpenChange={(open) => !open && !isResettingPassword && setResetPasswordUser(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-amber-600 dark:text-amber-500">
+              <KeyRound className="h-5 w-5" /> Reset User Password
+            </DialogTitle>
+            <DialogDescription>
+              Set a new custom password for account <strong className="text-foreground">{resetPasswordUser?.username}</strong>.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs font-semibold">New Password *</Label>
+                <button
+                  type="button"
+                  onClick={() => setNewResetPassword("Pass#" + Math.floor(1000 + Math.random() * 9000) + "!")}
+                  className="text-[11px] text-blue-600 hover:underline"
+                >
+                  Generate Strong
+                </button>
+              </div>
+              <div className="relative">
+                <Input 
+                  type={showResetPassword ? "text" : "password"}
+                  value={newResetPassword}
+                  onChange={e => setNewResetPassword(e.target.value)}
+                  placeholder="Enter new password (min 6 characters)"
+                  className="h-9 text-xs pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowResetPassword(!showResetPassword)}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                >
+                  {showResetPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+              <span className="text-[10px] text-muted-foreground">Minimum 6 characters</span>
+            </div>
+
+            <div className="flex items-center gap-2 pt-1">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="text-xs h-7 w-full text-slate-600"
+                onClick={() => setNewResetPassword("password123")}
+              >
+                Use Default: password123
+              </Button>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setResetPasswordUser(null)} disabled={isResettingPassword}>
+              Cancel
+            </Button>
             <Button 
-              onClick={confirmResetPassword} 
-              disabled={isResetting} 
+              onClick={handleConfirmResetPassword} 
+              disabled={isResettingPassword || newResetPassword.length < 6}
               className="bg-amber-600 hover:bg-amber-700 text-white font-medium"
             >
-              {isResetting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RotateCcw className="mr-2 h-4 w-4" />} Reset Password
+              {isResettingPassword ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RotateCcw className="mr-2 h-4 w-4" />}
+              Set Password
             </Button>
           </DialogFooter>
         </DialogContent>

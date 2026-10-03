@@ -6,10 +6,13 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Trash2, Loader2, Search, Plus, ArrowLeft } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Trash2, Loader2, Search, Plus, ArrowLeft, AlertTriangle } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { toast } from "sonner";
-import { GatePassRecord, GatePassRow, MasterDataRow } from "@/types";
+import { useAuth } from "@/hooks/use-auth";
+import { logAuditActivity } from "@/lib/audit";
+import { GatePassRecord, GatePassRow, MasterDataRow, Driver, Location, TimeSlot } from "@/types";
 
 interface Props {
   record: GatePassRecord | null;
@@ -18,8 +21,14 @@ interface Props {
 }
 
 export function EditGatePassModal({ record, onClose, onSaved }: Props) {
+  const { profile } = useAuth();
   const [saving, setSaving] = useState(false);
   const [editedRecord, setEditedRecord] = useState<GatePassRecord | null>(null);
+
+  // Lookups
+  const [locations, setLocations] = useState<Location[]>([]);
+  const [drivers, setDrivers] = useState<Driver[]>([]);
+  const [timeSlots, setTimeSlots] = useState<TimeSlot[]>([]);
 
   // Add Invoice Flow State
   const [showAddPanel, setShowAddPanel] = useState(false);
@@ -37,6 +46,23 @@ export function EditGatePassModal({ record, onClose, onSaved }: Props) {
       setSelectedToAdd([]);
       setAddInvoiceCartons({});
     }
+
+    const loadLookups = async () => {
+      try {
+        const [{ data: locs }, { data: drvs }, { data: times }] = await Promise.all([
+          supabase.from("delivery_locations").select("*").eq("is_active", true),
+          supabase.from("drivers").select("*"),
+          supabase.from("time_slots").select("*").eq("is_active", true),
+        ]);
+        if (locs) setLocations(locs);
+        if (drvs) setDrivers(drvs);
+        if (times) setTimeSlots(times);
+      } catch (err) {
+        console.error("Error loading lookups in edit gate pass modal:", err);
+      }
+    };
+
+    loadLookups();
   }, [record]);
 
   const fetchEligibleInvoices = async () => {
@@ -226,6 +252,34 @@ export function EditGatePassModal({ record, onClose, onSaved }: Props) {
 
   if (!editedRecord) return null;
 
+  const handleVehicleChange = (newVehicle: string) => {
+    if (!editedRecord) return;
+    const matchDriver = drivers.find(d => d.vehicle_number === newVehicle);
+    setEditedRecord({
+      ...editedRecord,
+      vehicle_number: newVehicle,
+      driver_name: matchDriver ? matchDriver.driver_name : editedRecord.driver_name,
+      phone_number: matchDriver ? matchDriver.phone_number : editedRecord.phone_number,
+      nic: matchDriver ? matchDriver.nic : editedRecord.nic,
+    });
+  };
+
+  const handleRowCartonEdit = (index: number, newCartonsVal: string) => {
+    if (!editedRecord) return;
+    const val = Number(newCartonsVal) || 0;
+    const updatedRows = [...editedRecord.rows];
+    updatedRows[index] = {
+      ...updatedRows[index],
+      cartons: val,
+    };
+    const totalCartons = updatedRows.reduce((acc, r) => acc + (Number(r.cartons) || 0), 0);
+    setEditedRecord({
+      ...editedRecord,
+      rows: updatedRows,
+      total_cartons: totalCartons,
+    });
+  };
+
   const handleRemoveInvoice = (invoiceNo: string) => {
     const updatedRows = editedRecord.rows.filter((r: GatePassRow) => r.invoice !== invoiceNo);
     
@@ -318,6 +372,22 @@ export function EditGatePassModal({ record, onClose, onSaved }: Props) {
         .eq('id', editedRecord.id);
         
       if (error) throw error;
+
+      await logAuditActivity({
+        action: 'GATE_PASS_EDITED',
+        entity_type: 'gate_pass',
+        entity_id: editedRecord.gate_pass_no,
+        details: {
+          vehicle_number: editedRecord.vehicle_number,
+          driver_name: editedRecord.driver_name,
+          location: editedRecord.location,
+          time: editedRecord.time,
+          total_cartons: editedRecord.total_cartons,
+          rows_count: editedRecord.rows.length
+        },
+        performed_by: profile?.username || 'User'
+      });
+
       toast.success("Gate pass updated successfully!");
       onSaved();
     } catch (err: any) {
@@ -424,89 +494,155 @@ export function EditGatePassModal({ record, onClose, onSaved }: Props) {
         ) : (
           <>
             <DialogHeader>
-              <DialogTitle>Edit Gate Pass: {editedRecord.gate_pass_no}</DialogTitle>
+              <div className="flex items-center justify-between">
+                <DialogTitle>Edit Gate Pass: {editedRecord.gate_pass_no}</DialogTitle>
+                <span className={`text-xs px-2.5 py-1 rounded-full font-semibold uppercase ${
+                  editedRecord.status === 'completed' 
+                    ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300' 
+                    : editedRecord.status === 'dispatched'
+                      ? 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300'
+                      : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-950 dark:text-yellow-300'
+                }`}>
+                  Status: {editedRecord.status || 'Pending'}
+                </span>
+              </div>
             </DialogHeader>
             
             <div className="flex-1 overflow-y-auto pr-4 py-4 space-y-6">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label>Vehicle Number</Label>
-                  <Input 
-                    value={editedRecord.vehicle_number} 
-                    onChange={(e) => setEditedRecord({...editedRecord, vehicle_number: e.target.value})} 
-                  />
+              {editedRecord.status !== 'issued' && editedRecord.status !== 'pending' && (
+                <div className="p-3 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded-lg flex items-center gap-2 text-amber-800 dark:text-amber-300 text-xs font-medium">
+                  <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600" />
+                  <span>Notice: This Gate Pass is marked as <strong className="uppercase">{editedRecord.status}</strong>. Please ensure modifications align with warehouse dispatch verification.</span>
                 </div>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label>Driver Name</Label>
+                  <Label className="text-xs font-semibold">Vehicle Number</Label>
+                  <Select value={editedRecord.vehicle_number} onValueChange={handleVehicleChange}>
+                    <SelectTrigger className="w-full h-9">
+                      <SelectValue placeholder="Select Vehicle" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {drivers.map(d => (
+                        <SelectItem key={d.id} value={d.vehicle_number}>
+                          {d.vehicle_number} - {d.driver_name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label className="text-xs font-semibold">Delivery Location</Label>
+                  <Select value={editedRecord.location} onValueChange={(val) => setEditedRecord({...editedRecord, location: val})}>
+                    <SelectTrigger className="w-full h-9">
+                      <SelectValue placeholder="Select Location" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {locations.map(l => (
+                        <SelectItem key={l.id} value={l.location_name}>
+                          {l.location_name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label className="text-xs font-semibold">Delivery Time Slot</Label>
+                  <Select value={editedRecord.time} onValueChange={(val) => setEditedRecord({...editedRecord, time: val})}>
+                    <SelectTrigger className="w-full h-9">
+                      <SelectValue placeholder="Select Time Slot" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {timeSlots.map(t => (
+                        <SelectItem key={t.id} value={t.label}>
+                          {t.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label className="text-xs font-semibold">Driver Name</Label>
                   <Input 
                     value={editedRecord.driver_name} 
                     onChange={(e) => setEditedRecord({...editedRecord, driver_name: e.target.value})} 
+                    className="h-9"
                   />
                 </div>
+
                 <div className="space-y-2">
-                  <Label>Driver Phone</Label>
+                  <Label className="text-xs font-semibold">Driver Phone</Label>
                   <Input 
                     value={editedRecord.phone_number} 
                     onChange={(e) => setEditedRecord({...editedRecord, phone_number: e.target.value})} 
+                    className="h-9"
                   />
                 </div>
+
                 <div className="space-y-2">
-                  <Label>Driver NIC</Label>
+                  <Label className="text-xs font-semibold">Driver NIC</Label>
                   <Input 
                     value={editedRecord.nic} 
                     onChange={(e) => setEditedRecord({...editedRecord, nic: e.target.value})} 
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Location</Label>
-                  <Input 
-                    value={editedRecord.location} 
-                    onChange={(e) => setEditedRecord({...editedRecord, location: e.target.value})} 
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Time Slot</Label>
-                  <Input 
-                    value={editedRecord.time} 
-                    onChange={(e) => setEditedRecord({...editedRecord, time: e.target.value})} 
+                    className="h-9"
                   />
                 </div>
               </div>
               
               <div className="space-y-2">
                 <div className="flex justify-between items-center">
-                  <Label>Invoices</Label>
+                  <div>
+                    <Label className="text-sm font-semibold">Gate Pass Invoice Items</Label>
+                    <p className="text-xs text-muted-foreground">Adjust carton counts per invoice or add/remove items</p>
+                  </div>
                   <Button size="sm" variant="outline" onClick={fetchEligibleInvoices}>
                     <Plus className="h-4 w-4 mr-2" />
                     Add Invoice
                   </Button>
                 </div>
-                <div className="border rounded-md">
+                
+                <div className="border rounded-md overflow-hidden">
                   <Table>
-                    <TableHeader className="bg-slate-200 dark:bg-slate-800 sticky top-0 z-10 shadow-sm">
+                    <TableHeader className="bg-slate-100 dark:bg-slate-800 sticky top-0 z-10 shadow-xs">
                       <TableRow>
-                        <TableHead>Invoice</TableHead>
-                        <TableHead>Buyer</TableHead>
-                        <TableHead className="text-right">Qty</TableHead>
-                        <TableHead className="text-right">Value</TableHead>
-                        <TableHead className="text-right">Cartons</TableHead>
+                        <TableHead className="font-semibold text-slate-700 dark:text-slate-200">Invoice</TableHead>
+                        <TableHead className="font-semibold text-slate-700 dark:text-slate-200">Buyer / DO</TableHead>
+                        <TableHead className="text-right font-semibold text-slate-700 dark:text-slate-200">Qty (Mtrs)</TableHead>
+                        <TableHead className="text-right font-semibold text-slate-700 dark:text-slate-200">Value ($)</TableHead>
+                        <TableHead className="text-right font-semibold text-slate-700 dark:text-slate-200 w-28">Cartons (CTN)</TableHead>
                         <TableHead className="w-12"></TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {editedRecord.rows.map((r, i) => (
                         <TableRow key={i}>
-                          <TableCell>{r.invoice}</TableCell>
-                          <TableCell>{r.buyer}</TableCell>
-                          <TableCell className="text-right">{r.mtrs}</TableCell>
-                          <TableCell className="text-right">${r.value}</TableCell>
-                          <TableCell className="text-right">{r.cartons}</TableCell>
+                          <TableCell className="font-medium">{r.invoice}</TableCell>
+                          <TableCell className="text-xs text-muted-foreground">
+                            <div>{r.buyer || "-"}</div>
+                            <div className="text-[11px] text-slate-400">DO: {r.do || "-"}</div>
+                          </TableCell>
+                          <TableCell className="text-right font-medium">{Number(r.mtrs || 0).toLocaleString()}</TableCell>
+                          <TableCell className="text-right">${Number(r.value || 0).toLocaleString()}</TableCell>
+                          <TableCell className="text-right">
+                            <Input 
+                              type="number"
+                              min="0"
+                              className="h-8 w-24 text-right ml-auto font-semibold bg-white dark:bg-slate-950"
+                              value={r.cartons ?? 0}
+                              onChange={(e) => handleRowCartonEdit(i, e.target.value)}
+                            />
+                          </TableCell>
                           <TableCell>
                             <Button 
                               variant="ghost" 
                               size="icon" 
-                              className="text-red-500 hover:text-red-600 hover:bg-red-50"
+                              className="text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/20"
                               onClick={() => handleRemoveInvoice(r.invoice)}
+                              title="Remove item"
                             >
                               <Trash2 className="h-4 w-4" />
                             </Button>
@@ -516,12 +652,21 @@ export function EditGatePassModal({ record, onClose, onSaved }: Props) {
                     </TableBody>
                   </Table>
                 </div>
+
+                <div className="flex flex-wrap justify-between items-center px-4 py-2.5 bg-slate-100/70 dark:bg-slate-900 border rounded-lg text-xs font-medium gap-2">
+                  <span>Total Invoices: <strong>{editedRecord.rows.length}</strong></span>
+                  <span>Total Meters: <strong>{(Number(editedRecord.total_mtrs) || 0).toLocaleString()}</strong></span>
+                  <span>Total Value: <strong>${(Number(editedRecord.total_value) || 0).toLocaleString()}</strong></span>
+                  <span className="text-blue-700 dark:text-blue-400 font-bold text-sm">
+                    Total Cartons: {editedRecord.total_cartons}
+                  </span>
+                </div>
               </div>
             </div>
             
-            <DialogFooter className="mt-4">
+            <DialogFooter className="mt-4 gap-2">
               <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
-              <Button onClick={handleSave} disabled={saving}>
+              <Button onClick={handleSave} disabled={saving} className="bg-blue-600 hover:bg-blue-700 text-white">
                 {saving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
                 Save Changes
               </Button>

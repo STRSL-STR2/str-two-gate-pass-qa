@@ -263,6 +263,55 @@ BEGIN
 END;
 $$;
 
+-- E1. Admin Update User Role
+CREATE OR REPLACE FUNCTION public.admin_update_user_role(
+    p_user_id UUID,
+    p_new_role TEXT
+)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, extensions
+AS $$
+BEGIN
+    IF p_new_role NOT IN ('super_admin', 'admin', 'user', 'viewer') THEN
+        RAISE EXCEPTION 'Invalid role: %', p_new_role;
+    END IF;
+
+    UPDATE public.app_users
+    SET role = p_new_role
+    WHERE id = p_user_id;
+
+    RETURN TRUE;
+END;
+$$;
+
+-- E2. Admin Update User Details
+CREATE OR REPLACE FUNCTION public.admin_update_user_details(
+    p_user_id UUID,
+    p_email TEXT,
+    p_role TEXT
+)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, extensions
+AS $$
+BEGIN
+    IF p_role NOT IN ('super_admin', 'admin', 'user', 'viewer') THEN
+        RAISE EXCEPTION 'Invalid role: %', p_role;
+    END IF;
+
+    UPDATE public.app_users
+    SET 
+        email = nullif(trim(p_email), ''),
+        role = p_role
+    WHERE id = p_user_id;
+
+    RETURN TRUE;
+END;
+$$;
+
 -- F. Fast Duplicate Invoices Checker
 CREATE OR REPLACE FUNCTION public.check_duplicate_invoices(
     target_invoices TEXT[]
@@ -294,6 +343,9 @@ SECURITY DEFINER
 SET search_path = public, extensions
 AS $$
 DECLARE
+    v_year TEXT := to_char(now(), 'YY');
+    v_month TEXT := upper(to_char(now(), 'Mon'));
+    v_pattern TEXT := '^STR2GP-' || v_year || '-[A-Z]{3}-([0-9]+)$';
     v_max_num INT := 0;
     v_record RECORD;
     v_num_str TEXT;
@@ -302,9 +354,9 @@ BEGIN
     FOR v_record IN 
         SELECT gate_pass_no 
         FROM public.gate_pass_records 
-        WHERE gate_pass_no ~ '^STR2GP-[0-9]+$'
+        WHERE gate_pass_no ~ v_pattern
     LOOP
-        v_num_str := substring(v_record.gate_pass_no from 'STR2GP-([0-9]+)');
+        v_num_str := substring(v_record.gate_pass_no from ('^STR2GP-' || v_year || '-[A-Z]{3}-([0-9]+)$'));
         IF v_num_str IS NOT NULL THEN
             v_current_num := v_num_str::INT;
             IF v_current_num > v_max_num THEN
@@ -313,7 +365,7 @@ BEGIN
         END IF;
     END LOOP;
 
-    RETURN 'STR2GP-' || lpad((v_max_num + 1)::TEXT, 4, '0');
+    RETURN 'STR2GP-' || v_year || '-' || v_month || '-' || lpad((v_max_num + 1)::TEXT, 4, '0');
 END;
 $$;
 
@@ -451,6 +503,8 @@ GRANT EXECUTE ON FUNCTION public.change_user_password(UUID, TEXT, TEXT) TO anon,
 GRANT EXECUTE ON FUNCTION public.admin_create_user(TEXT, TEXT, TEXT, TEXT) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.admin_reset_user_password(UUID, TEXT) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.admin_delete_user(UUID) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.admin_update_user_role(UUID, TEXT) TO anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.admin_update_user_details(UUID, TEXT, TEXT) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.check_duplicate_invoices(TEXT[]) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.get_next_gate_pass_number() TO anon, authenticated;
 

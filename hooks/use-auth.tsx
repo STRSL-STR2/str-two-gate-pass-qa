@@ -27,6 +27,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         .single();
 
       if (!error && data) {
+        if (!data.is_active) {
+          setProfile(null);
+          localStorage.removeItem("auth_user");
+          return;
+        }
         setProfile(data as Profile);
         localStorage.setItem("auth_user", JSON.stringify(data));
       }
