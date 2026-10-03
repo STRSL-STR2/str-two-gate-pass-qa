@@ -1287,12 +1287,12 @@ export default function Settings() {
                 <Table className="min-w-[750px]">
                   <TableHeader className="bg-slate-100 dark:bg-slate-800 sticky top-0 z-10 shadow-xs border-b border-slate-200 dark:border-slate-700">
                     <TableRow className="hover:bg-transparent">
-                      <TableHead className="font-semibold text-slate-700 dark:text-slate-200 text-xs">Username</TableHead>
-                      <TableHead className="font-semibold text-slate-700 dark:text-slate-200 text-xs">Email</TableHead>
-                      <TableHead className="font-semibold text-slate-700 dark:text-slate-200 text-xs">Account Role</TableHead>
-                      <TableHead className="font-semibold text-slate-700 dark:text-slate-200 text-xs">Status</TableHead>
-                      <TableHead className="font-semibold text-slate-700 dark:text-slate-200 text-xs">Joined</TableHead>
-                      <TableHead className="font-semibold text-slate-700 dark:text-slate-200 text-xs text-right pr-4">Actions</TableHead>
+                      <TableHead className="w-44 font-semibold text-slate-700 dark:text-slate-200 text-xs">Username</TableHead>
+                      <TableHead className="w-56 font-semibold text-slate-700 dark:text-slate-200 text-xs">Email</TableHead>
+                      <TableHead className="w-36 font-semibold text-slate-700 dark:text-slate-200 text-xs">Account Role</TableHead>
+                      <TableHead className="w-28 font-semibold text-slate-700 dark:text-slate-200 text-xs">Status</TableHead>
+                      <TableHead className="w-32 font-semibold text-slate-700 dark:text-slate-200 text-xs">Joined</TableHead>
+                      <TableHead className="w-60 font-semibold text-slate-700 dark:text-slate-200 text-xs text-center">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -1338,11 +1338,11 @@ export default function Settings() {
                               </div>
                             </TableCell>
                             <TableCell className="text-slate-500 text-xs">{new Date(p.created_at || new Date()).toLocaleDateString()}</TableCell>
-                            <TableCell className="text-right pr-4">
-                              <div className="flex items-center justify-end gap-1.5">
+                            <TableCell className="w-60 text-center">
+                              <div className="flex items-center justify-center gap-1.5 whitespace-nowrap">
                                 {!canManageUser ? (
-                                  <span className="inline-flex items-center text-[11px] text-purple-700 dark:text-purple-400 bg-purple-50 dark:bg-purple-950/30 px-2 py-0.5 rounded border border-purple-200 dark:border-purple-800 font-medium">
-                                    <Lock className="h-3 w-3 mr-1" /> Protected
+                                  <span className="inline-flex items-center justify-center text-[11px] text-purple-700 dark:text-purple-400 bg-purple-50 dark:bg-purple-950/40 px-2.5 py-1 rounded-md border border-purple-200 dark:border-purple-800 font-medium h-7 shadow-2xs">
+                                    <Lock className="h-3 w-3 mr-1" /> Protected Account
                                   </span>
                                 ) : (
                                   <>
@@ -1350,30 +1350,39 @@ export default function Settings() {
                                       variant="outline" 
                                       size="sm" 
                                       onClick={() => handleOpenEditRole(p)} 
-                                      className="h-7 text-xs px-2"
+                                      className="h-7 text-xs px-2.5 font-medium border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:text-indigo-600 hover:border-indigo-300 hover:bg-indigo-50/80 dark:hover:bg-indigo-950/40 transition-colors shadow-2xs"
                                       title="Change User Role"
                                     >
-                                      <Edit2 className="h-3 w-3 mr-1" /> Role
+                                      <Edit2 className="h-3 w-3 mr-1 text-indigo-500" />
+                                      <span>Role</span>
                                     </Button>
                                     <Button 
                                       variant="outline" 
                                       size="sm" 
                                       onClick={() => handleOpenResetPassword(p)} 
-                                      className="h-7 text-xs px-2 text-amber-700 dark:text-amber-400 border-amber-300 dark:border-amber-800 hover:bg-amber-50 dark:hover:bg-amber-950/30"
+                                      className="h-7 text-xs px-2.5 font-medium border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:text-amber-600 hover:border-amber-300 hover:bg-amber-50/80 dark:hover:bg-amber-950/40 transition-colors shadow-2xs"
                                       title="Reset Password"
                                     >
-                                      <KeyRound className="h-3 w-3 mr-1" /> Reset PW
+                                      <KeyRound className="h-3 w-3 mr-1 text-amber-500" />
+                                      <span>Reset PW</span>
                                     </Button>
-                                    {p.username !== 'admin' && p.id !== profile?.id && (
+                                    {p.username !== 'admin' && p.id !== profile?.id ? (
                                       <Button 
-                                        variant="ghost" 
-                                        size="icon" 
+                                        variant="outline" 
+                                        size="sm" 
                                         onClick={() => handleDeleteUser(p.id)} 
-                                        className="h-7 w-7 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/50"
+                                        className="h-7 w-7 p-0 border-slate-200 dark:border-slate-700 text-slate-400 hover:text-red-600 hover:border-red-300 hover:bg-red-50/80 dark:hover:bg-red-950/40 transition-colors shadow-2xs shrink-0"
                                         title="Delete User"
                                       >
                                         <Trash2 className="h-3.5 w-3.5" />
                                       </Button>
+                                    ) : (
+                                      <div 
+                                        className="h-7 w-7 flex items-center justify-center rounded-md border border-dashed border-slate-200 dark:border-slate-800 text-slate-300 dark:text-slate-700 cursor-not-allowed opacity-40 shrink-0"
+                                        title={p.username === 'admin' ? "System admin account cannot be deleted" : "You cannot delete your own account"}
+                                      >
+                                        <Trash2 className="h-3.5 w-3.5" />
+                                      </div>
                                     )}
                                   </>
                                 )}
