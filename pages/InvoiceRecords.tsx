@@ -167,7 +167,8 @@ export default function InvoiceRecords() {
       "BUYER": row.ship_via_description || "",
       "Location": row.consignee_address_3 || "",
       "Status": row.gate_pass_issued ? `Issued: ${row.gate_pass_issued}` : "Pending",
-      "RMA Status": row.rma_status ? "RMA EXISTS" : "No RMA"
+      "RMA Status": row.rma_status ? "RMA EXISTS" : "No RMA",
+      "Post": row.is_posted ? "Posted" : "Not Posted"
     }));
     const ws = XLSX.utils.json_to_sheet(exportRows);
     const wb = XLSX.utils.book_new();
